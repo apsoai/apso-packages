@@ -1,0 +1,66 @@
+name: auto-release
+
+# Path-detected automatic release, mirroring the CLI's push-to-main automation
+# but independently per package. On a push to main, each package whose directory
+# changed since its last release tag is version-bumped (from conventional-commit
+# messages), built, tested, published, committed, tagged, and GitHub-released.
+#
+# Everything happens inline (no reliance on tag events triggering other
+# workflows). The bump commit is pushed with the default token + `[skip ci]`, so
+# it does not re-trigger this workflow.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Never run against this workflow's own release commit.
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # commit version bumps, push tags, create releases
+      id-token: write # PyPI Trusted Publishing (OIDC)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags for change detection
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      # Detect → bump → build/test → publish npm + build PyPI dist. Sets
+      # <PKG>_RELEASE / <PKG>_VERSION in the job env for later steps.
+      - name: Prepare + publish (npm/go-build)
+        run: bash .github/scripts/auto-release.sh prepare
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }} # org-level automation token (@apso scope)
+          GH_TOKEN: ${{ github.token }}
+
+      # PyPI publish via OIDC (only when the Python package was bumped). Trusted
+      # Publishing must be configured on the apso-domain-events PyPI project.
+      - name: Publish to PyPI
+        if: ${{ env.PY_RELEASE == 'true' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: python/packages/domain-events/dist
+
+      # Now that publishes succeeded, commit the bumps + push tags + GitHub releases.
+      - name: Finalize (commit, tag, release)
+        run: bash .github/scripts/auto-release.sh finalize
+        env:
+          GH_TOKEN: ${{ github.token }}
