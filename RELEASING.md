@@ -1,33 +1,40 @@
 # Releasing
 
-Each package is versioned and released **independently** via a path/prefixed git tag.
-Bump the version in the package manifest first, commit, then push the matching tag.
+Releases are **automatic and path-detected**, mirroring the CLI's push-to-main automation —
+but **independently per package**. You don't tag or bump by hand.
 
-| Package | Bump version in | Tag to push | Result |
+## How it works
+
+On every push to `main`, `.github/workflows/auto-release.yml` runs `auto-release.sh`, which for
+each package checks whether its directory changed since that package's last release tag:
+
+| Package | Watched path | Tag | Registry |
 |---|---|---|---|
-| `@apso/domain-events` (npm) | `typescript/packages/domain-events/package.json` | `ts-domain-events-vX.Y.Z` | `release-ts.yml` → `npm publish` |
-| `apso-domain-events` (PyPI) | `python/packages/domain-events/pyproject.toml` | `py-domain-events-vX.Y.Z` | `release-python.yml` → PyPI (OIDC) |
-| `domainevents` (Go) | n/a (version *is* the tag) | `go/domainevents/vX.Y.Z` | `release-go.yml` validates + GitHub Release; the module proxy serves the tag |
+| `@apso/domain-events` | `typescript/packages/domain-events/` | `ts-domain-events-vX.Y.Z` | npm |
+| `apso-domain-events` | `python/packages/domain-events/` | `py-domain-events-vX.Y.Z` | PyPI |
+| `domainevents` (Go) | `go/domainevents/` | `go/domainevents/vX.Y.Z` | Go proxy (tag only) |
 
-The tag version must match the manifest version (npm/PyPI workflows enforce this).
+If a package changed, it is:
+1. **Version-bumped** from the commit messages since its last tag — `feat:` → minor,
+   `!:` / `BREAKING CHANGE` → major, otherwise patch. (First release ships the current
+   manifest version / `0.1.0` for Go.)
+2. **Built, tested, and published** (npm publish / PyPI / Go = the tag).
+3. **Committed** (`chore(release): … [skip ci]`), **tagged**, and **GitHub-released**.
+
+A package whose directory didn't change is skipped. The release commit is marked `[skip ci]`
+and pushed with the default token, so it never re-triggers the workflow.
 
 ## One-time setup
 
-- **npm:** the workflow uses the **org-level** `NPM_TOKEN` secret. Ensure that secret's
-  *Repository access* includes `apso-packages`, and that it's an npm **automation token**
-  with publish rights to the `@apso` scope.
-- **PyPI:** configure **Trusted Publishing** on the `apso-domain-events` PyPI project →
-  GitHub publisher: owner `apsoai`, repo `apso-packages`, workflow `release-python.yml`.
-  No secret is stored. (For the very first publish, use PyPI's "pending publisher" flow.)
-- **Go:** nothing — the repo is public, so pushing the tag is the publish.
+- **npm:** the org-level `NPM_TOKEN` secret must be an automation token with publish rights to
+  the `@apso` scope, and its *Repository access* must include `apso-packages`.
+- **PyPI:** configure **Trusted Publishing** on the `apso-domain-events` project → GitHub
+  publisher: owner `apsoai`, repo `apso-packages`, workflow `auto-release.yml`. (No secret.)
+- **Go:** nothing — public repo + tag.
 
-## Example
+## Normal flow
 
-```bash
-# TypeScript
-# (bump version in typescript/packages/domain-events/package.json to 0.1.1, commit)
-git tag ts-domain-events-v0.1.1 && git push origin ts-domain-events-v0.1.1
+Just merge to `main`. Change `typescript/packages/domain-events/**` → the TS package releases;
+touch the Go dir → Go releases; etc. Use conventional-commit prefixes to control the bump level.
 
-# Go
-git tag go/domainevents/v0.1.0 && git push origin go/domainevents/v0.1.0
-```
+`workflow_dispatch` is available to re-run detection manually.
