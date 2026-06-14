@@ -1,0 +1,24 @@
+# Node / TypeScript
+node_modules/
+dist/
+*.tsbuildinfo
+.npmrc
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Go
+bin/
+
+# Misc
+.DS_Store
+.env
+.env.local
+*.log
