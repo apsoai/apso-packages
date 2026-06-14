@@ -3,6 +3,7 @@ package domainevents
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -23,7 +24,12 @@ type captureIgnored struct {
 
 func newTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{
+	// Each test gets its own isolated in-memory database. A shared-cache DSN
+	// keyed by the test name keeps the DB alive across this test's connections
+	// while preventing cross-test row pollution (a single global
+	// "file::memory:?cache=shared" DSN is shared process-wide).
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
