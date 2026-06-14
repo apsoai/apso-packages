@@ -58,9 +58,17 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: python/packages/domain-events/dist
+          skip-existing: true
 
-      # Now that publishes succeeded, commit the bumps + push tags + GitHub releases.
+      # Commit the bumps + push tags + GitHub releases for packages that succeeded.
       - name: Finalize (commit, tag, release)
         run: bash .github/scripts/auto-release.sh finalize
         env:
           GH_TOKEN: ${{ github.token }}
+
+      # Surface per-package failures (prepare isolates them so others still ship).
+      - name: Report
+        if: ${{ env.RELEASE_FAILED == '1' }}
+        run: |
+          echo "::error::one or more packages failed to release (see earlier logs)"
+          exit 1
