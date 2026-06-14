@@ -1,0 +1,29 @@
+name: python
+
+on:
+  push:
+    paths:
+      - "python/**"
+      - ".github/workflows/python.yml"
+  pull_request:
+    paths:
+      - "python/**"
+      - ".github/workflows/python.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: pip install -e "python/packages/domain-events[dev]"
+
+      - name: Test
+        run: pytest
+        working-directory: python/packages/domain-events
