@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "apso-domain-events"
+version = "0.1.0"
+description = "Transactional outbox + delivery for Apso services (SQLAlchemy / FastAPI)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Apso" }]
+keywords = ["outbox", "domain-events", "sqlalchemy", "fastapi", "webhooks"]
+dependencies = [
+    "SQLAlchemy>=2.0",
+]
+
+[project.optional-dependencies]
+kafka = ["confluent-kafka>=2.0"]
+aws = ["boto3>=1.26"]
+fastapi = ["fastapi>=0.100"]
+dev = [
+    "pytest>=7.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+apso_domain_events = ["py.typed"]
