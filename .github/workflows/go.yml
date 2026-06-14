@@ -25,9 +25,21 @@ jobs:
           go-version: "1.21"
 
       - name: Resolve dependencies
-        # go.sum is not committed (no Go toolchain on the authoring machine);
-        # tidy resolves the module graph and writes go.sum in CI.
-        run: go mod tidy
+        # go.sum is not committed and the initial go.mod versions were authored
+        # without a Go toolchain, so some pins (AWS SDK service modules) may not
+        # exist. Resolve real versions from the proxy, then tidy.
+        run: |
+          go get \
+            github.com/aws/aws-sdk-go-v2@latest \
+            github.com/aws/aws-sdk-go-v2/config@latest \
+            github.com/aws/aws-sdk-go-v2/service/sqs@latest \
+            github.com/aws/aws-sdk-go-v2/service/eventbridge@latest \
+            github.com/segmentio/kafka-go@latest \
+            gorm.io/gorm@latest \
+            gorm.io/datatypes@latest \
+            github.com/google/uuid@latest \
+            github.com/glebarez/sqlite@latest
+          go mod tidy
 
       - name: Check gofmt (non-blocking)
         run: |
