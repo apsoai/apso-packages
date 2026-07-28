@@ -4,7 +4,7 @@
   "private": true,
   "description": "Apso first-party TypeScript libraries (npm workspace root).",
   "workspaces": [
-    "packages/*"
+    "packages/domain-events"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
