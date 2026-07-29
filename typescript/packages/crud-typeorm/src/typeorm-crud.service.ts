@@ -197,11 +197,24 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     const fields = req.parsed.fields;
 
     if (fields && fields.length > 0) {
-      // Remove duplicates to fix issue #777
-      const uniqueFields = [...new Set(fields)];
-      const selectFields = uniqueFields.map(field => `entity.${field}`);
+      const selectFields = this.getSelect(req.parsed, this.options.query);
       queryBuilder.select(selectFields);
     }
+  }
+
+  /**
+   * nestjsx-compatible protected override point: subclasses override
+   * getSelect to adjust column selection (platform/server's autogen
+   * services override it for the issue-#777 dedup, which the base now
+   * does anyway).
+   */
+  protected getSelect(
+    parsed: ParsedRequest['parsed'],
+    _options: CrudServiceOptions['query']
+  ): string[] {
+    // Remove duplicates to fix nestjsx issue #777
+    const uniqueFields = [...new Set(parsed.fields || [])];
+    return uniqueFields.map(field => `entity.${field}`);
   }
 
   /**

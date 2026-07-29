@@ -16,9 +16,12 @@ import {
   Body,
   Param,
   Query,
+  Req,
   UseInterceptors,
   SetMetadata
 } from '@nestjs/common';
+import { extractParsedRequest as extractParsed } from '@apso/crud-request';
+import { findOverride, wrapHandlerParams, BaseRouteName } from './nestjsx-compat';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery, ApiBody } from '@nestjs/swagger';
 import {
   CrudControllerOptions,
@@ -375,13 +378,59 @@ function generateQueryDocumentation(options: CrudControllerOptions) {
 }
 
 /**
- * Apply decorators to a method
+ * Service method + handler shape per base route (nestjsx naming).
  */
-function applyMethodDecorators(target: any, methodName: string, decorators: any[]) {
-  const method = target.prototype[methodName];
-  if (method) {
-    decorators.forEach(decorator => {
-      decorator(target.prototype, methodName, Object.getOwnPropertyDescriptor(target.prototype, methodName));
-    });
+const SERVICE_METHOD: Record<string, { op: string; hasBody: boolean }> = {
+  getManyBase: { op: 'getMany', hasBody: false },
+  getOneBase: { op: 'getOne', hasBody: false },
+  createOneBase: { op: 'createOne', hasBody: true },
+  createManyBase: { op: 'createMany', hasBody: true },
+  updateOneBase: { op: 'updateOne', hasBody: true },
+  replaceOneBase: { op: 'replaceOne', hasBody: true },
+  deleteOneBase: { op: 'deleteOne', hasBody: false },
+  recoverOneBase: { op: 'recoverOne', hasBody: false }
+};
+
+/**
+ * Resolve the handler that should carry a base route's HTTP decorators and
+ * inject a delegating handler when the controller has none — this is what
+ * makes plain `class X implements CrudController<T>` work like nestjsx:
+ *
+ * order: @Override-marked method > <op>Base > legacy <op> > injected <op>Base
+ */
+function applyMethodDecorators(target: any, legacyName: string, decorators: any[]) {
+  const proto = target.prototype;
+  const baseName = `${legacyName}Base` as BaseRouteName;
+  const spec = SERVICE_METHOD[baseName];
+
+  let methodName =
+    findOverride(proto, baseName) ||
+    (typeof proto[baseName] === 'function' ? baseName : undefined) ||
+    (typeof proto[legacyName] === 'function' ? legacyName : undefined);
+
+  if (!methodName && spec) {
+    // Inject the nestjsx-named base handler delegating to the service
+    if (spec.hasBody) {
+      proto[baseName] = function (this: any, req: any, dto: any) {
+        return this.service[spec.op](extractParsed(req), dto);
+      };
+      Req()(proto, baseName, 0);
+      Body()(proto, baseName, 1);
+    } else {
+      proto[baseName] = function (this: any, req: any) {
+        return this.service[spec.op](extractParsed(req));
+      };
+      Req()(proto, baseName, 0);
+    }
+    methodName = baseName;
   }
+
+  if (!methodName) return;
+
+  // @ParsedRequest-marked params on overrides receive the parsed request
+  wrapHandlerParams(proto, methodName);
+
+  decorators.forEach(decorator => {
+    decorator(proto, methodName, Object.getOwnPropertyDescriptor(proto, methodName));
+  });
 }
