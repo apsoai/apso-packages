@@ -252,6 +252,19 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   }
 
   /**
+   * Known column property names of the root entity, or null when metadata is
+   * unavailable (mock repositories in unit tests) — null means "don't
+   * filter", preserving prior behavior.
+   */
+  protected rootColumnNames(): Set<string> | null {
+    try {
+      return new Set(this.repository.metadata.columns.map(c => c.propertyName));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * nestjsx-compatible protected override point: subclasses override
    * getSelect to adjust column selection (platform/server's autogen
    * services override it for the issue-#777 dedup, which the base now
@@ -261,9 +274,13 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     parsed: ParsedRequest['parsed'],
     _options: CrudServiceOptions['query']
   ): string[] {
+    // nestjsx silently drops unknown field names (clients build field lists
+    // dynamically; a stale name must not 500 the endpoint — #42).
+    const known = this.rootColumnNames();
+    const requested = (parsed.fields || []).filter(f => !known || known.has(f));
     // nestjsx always includes the primary key(s), PK first; dedup fixes
     // nestjsx issue #777.
-    const uniqueFields = [...new Set([...this.rootPrimaryKeys(), ...(parsed.fields || [])])];
+    const uniqueFields = [...new Set([...this.rootPrimaryKeys(), ...requested])];
     return uniqueFields.map(field => `entity.${field}`);
   }
 
@@ -601,15 +618,18 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
       case '$exclL':   return { clause: `LOWER(${col}) NOT LIKE ${p}`, params: { [key]: `%${String(value).toLowerCase()}%` } };
       case '$inL':
         requireArray();
+        // nestjsx L-variant multi-value ops lower only the COLUMN; values
+        // are compared as given (#41).
         return {
           clause: `LOWER(${col}) IN (:...${key})`,
-          params: { [key]: value.map((v: any) => String(v).toLowerCase()) }
+          params: { [key]: value }
         };
       case '$notinL':
         requireArray();
+        // Values as given, column lowered (#41).
         return {
           clause: `LOWER(${col}) NOT IN (:...${key})`,
-          params: { [key]: value.map((v: any) => String(v).toLowerCase()) }
+          params: { [key]: value }
         };
       default:
         // nestjsx runtime behavior: unknown operators inside a search tree

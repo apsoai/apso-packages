@@ -449,9 +449,10 @@ describe('TypeOrmCrudService', () => {
         clause: 'entity.field NOT IN (:...p0)',
         params: { p0: [1, 2] }
       });
+      // #41: L-variant multi-value ops lower only the column; values as given
       expect(build('$inL', ['A', 'B'])).toEqual({
         clause: 'LOWER(entity.field) IN (:...p0)',
-        params: { p0: ['a', 'b'] }
+        params: { p0: ['A', 'B'] }
       });
     });
 

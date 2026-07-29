@@ -65,6 +65,17 @@ export const CORPUS: string[] = [
   '/authors/1?join=posts',
   '/authors?join=nonexistent',                        // not in allowlist: skipped both sides
 
+  // #42: unknown column in fields= is silently ignored, not a 500
+  '/authors?fields=name,notacolumn',
+  '/authors?fields=notacolumn',
+  '/authors/1?fields=name,bogus',
+
+  // #41: $inL/$notinL lower only the column, values as given
+  '/authors?filter=name||$inL||ada,cleo',
+  '/authors?filter=name||$inL||ADA,CLEO',
+  '/authors?filter=name||$notinL||ada,cleo',
+  '/authors?filter=plan||$inL||pro,team',
+
   // parser edge cases (residual #19): invalid inputs must match nestjsx
   '/authors?sort=age,SIDEWAYS',
   '/authors?s={bad json',
