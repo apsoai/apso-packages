@@ -63,10 +63,17 @@ export {
   PARSED_CRUD_REQUEST_KEY,
 } from '@apso/crud-core';
 
-// Re-export request parsing utilities
+// NestJS interceptor + parsed-request decorators (moved here from
+// crud-request, which is now client-safe — #37).
 export {
   CrudRequestInterceptor,
   extractParsedRequest,
+  CrudRequest as CrudRequestDecorator,
+  ParsedCrudRequest,
+} from './crud-request.interceptor';
+
+// Re-export the client-safe parser from crud-request.
+export {
   CrudRequestParser,
   createRequestParser,
   parseRequest,

@@ -8,7 +8,7 @@
  */
 import { Body, Req } from '@nestjs/common';
 import { ParsedRequest as ParsedRequestType, CrudAuthOptions, CRUD_AUTH_OPTIONS_METADATA } from '@apso/crud-core';
-import { extractParsedRequest } from '@apso/crud-request';
+import { extractParsedRequest } from './crud-request.interceptor';
 
 /** nestjsx name for the parsed request type. */
 export type CrudRequest = ParsedRequestType;

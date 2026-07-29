@@ -20,7 +20,7 @@ import {
   UseInterceptors,
   SetMetadata
 } from '@nestjs/common';
-import { extractParsedRequest as extractParsed } from '@apso/crud-request';
+import { extractParsedRequest as extractParsed } from './crud-request.interceptor';
 import { findOverride, wrapHandlerParams, BaseRouteName } from './nestjsx-compat';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery, ApiBody } from '@nestjs/swagger';
 import {
@@ -29,7 +29,7 @@ import {
   CRUD_CONTROLLER_METADATA,
   CrudValidationGroups
 } from '@apso/crud-core';
-import { CrudRequestInterceptor, extractParsedRequest } from '@apso/crud-request';
+import { CrudRequestInterceptor, extractParsedRequest } from './crud-request.interceptor';
 
 /**
  * Main CRUD decorator that configures a controller class for CRUD operations

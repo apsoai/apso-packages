@@ -48,7 +48,7 @@ const mockRequest = {
 // Mock the extractParsedRequest function. The factory is hoisted above
 // mockRequest's initialization, so it must dereference lazily (at call
 // time), not capture the value at factory time.
-jest.mock('@apso/crud-request', () => ({
+jest.mock('./crud-request.interceptor', () => ({
   extractParsedRequest: jest.fn(
     (req: Record<symbol, unknown>) => req[Symbol.for('PARSED_CRUD_REQUEST_KEY')],
   ),
