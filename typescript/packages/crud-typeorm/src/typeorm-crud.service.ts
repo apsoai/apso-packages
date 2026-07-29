@@ -5,8 +5,8 @@
  * with enhanced features and bug fixes (including the duplicate field selection issue).
  */
 
-import { Injectable } from '@nestjs/common';
-import { Repository, SelectQueryBuilder, EntityTarget, ObjectLiteral } from 'typeorm';
+import { BadRequestException, Injectable } from '@nestjs/common';
+import { Brackets, Repository, SelectQueryBuilder, EntityTarget, ObjectLiteral, WhereExpressionBuilder } from 'typeorm';
 import {
   CrudService,
   ParsedRequest,
@@ -95,13 +95,14 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   }
 
   async createOne(req: ParsedRequest, dto: DeepPartial<T>): Promise<CreateOneResponse<T>> {
-    const entity = this.repository.create(dto as any);
+    const entity = this.repository.create(this.withAuthPersist(req, dto) as any);
     const saved = await this.repository.save(entity) as unknown as T;
     return { data: saved };
   }
 
   async createMany(req: ParsedRequest, dto: CreateManyDto<T>): Promise<CreateManyResponse<T>> {
-    const entities = this.repository.create(dto.bulk as any[]);
+    const bulk = (dto.bulk as any[]).map(item => this.withAuthPersist(req, item));
+    const entities = this.repository.create(bulk);
     const saved = await this.repository.save(entities) as T[];
     return { data: saved };
   }
@@ -115,7 +116,9 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
       throw new Error('Entity not found');
     }
 
-    const updated = await this.repository.save({ ...entity, ...dto } as any);
+    const updated = await this.repository.save(
+      { ...entity, ...this.withAuthPersist(req, dto) } as any
+    );
     return { data: updated };
   }
 
@@ -128,8 +131,19 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
       throw new Error('Entity not found');
     }
 
-    const replaced = await this.repository.save(dto as any);
+    const replaced = await this.repository.save(this.withAuthPersist(req, dto) as any);
     return { data: replaced };
+  }
+
+  /**
+   * Merge crud auth.persist fields into a mutation DTO. Persist wins over
+   * client-supplied values (nestjsx semantics): the auth layer pins fields
+   * like workspaceId regardless of what the request body claims.
+   */
+  protected withAuthPersist<D>(req: ParsedRequest, dto: D): D {
+    const persist = req.parsed.authPersist;
+    if (!persist || typeof persist !== 'object') return dto;
+    return { ...dto, ...persist };
   }
 
   async deleteOne(req: ParsedRequest): Promise<DeleteOneResponse> {
@@ -166,37 +180,76 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   }
 
   /**
-   * Apply WHERE conditions to query builder
+   * Apply WHERE conditions to query builder.
+   *
+   * The parser merges paramsFilter, options filter, query filter/or/s, and
+   * the crud auth filter into ONE search tree (parsed.search), exactly like
+   * nestjsx/crud. WHERE is built solely from that tree, so an auth filter
+   * ANDed at the top can never be widened by user-supplied conditions.
+   *
+   * Fallback: a hand-constructed ParsedRequest with an empty search still
+   * gets paramsFilter applied, so getOne/update/delete always target by id.
    */
   protected applyWhere(queryBuilder: SelectQueryBuilder<T>, req: ParsedRequest): void {
-    const { filter, search, or } = req.parsed;
+    const { search, paramsFilter } = req.parsed;
+    const counter = { n: 0 };
 
-    // Apply regular filters
-    if (filter && filter.length > 0) {
-      filter.forEach((condition, index) => {
-        this.addWhereCondition(queryBuilder, condition, `filter_${index}`);
-      });
-    }
-
-    // Apply OR filters
-    if (or && or.length > 0) {
-      const orConditions = or.map((condition, index) => {
-        return this.buildWhereCondition(condition, `or_${index}`);
-      });
-
-      if (orConditions.length > 0) {
-        queryBuilder.andWhere(`(${orConditions.join(' OR ')})`,
-          or.reduce((params, condition, index) => ({
-            ...params,
-            [`or_${index}`]: condition.value
-          }), {})
-        );
-      }
-    }
-
-    // Apply search conditions
     if (search && Object.keys(search).length > 0) {
-      this.applySearchConditions(queryBuilder, search);
+      queryBuilder.andWhere(new Brackets(qb => this.buildSearch(qb, search, '$and', counter)));
+      return;
+    }
+
+    if (paramsFilter && paramsFilter.length > 0) {
+      paramsFilter.forEach(condition => {
+        const { clause, params } = this.buildCondition(condition.field, condition.operator, condition.value, counter);
+        queryBuilder.andWhere(clause, params);
+      });
+    }
+  }
+
+  /**
+   * Recursively build WHERE from a nestjsx-shaped search tree:
+   *   { $and: [...] } | { $or: [...] } |
+   *   { field: primitive } | { field: { $op: value, ... } }
+   * Multiple keys on one node are ANDed (nestjsx semantics).
+   */
+  protected buildSearch(
+    qb: WhereExpressionBuilder,
+    node: any,
+    mode: '$and' | '$or',
+    counter: { n: number }
+  ): void {
+    const attach = (fragment: (inner: WhereExpressionBuilder) => void) => {
+      const bracket = new Brackets(inner => fragment(inner));
+      if (mode === '$or') qb.orWhere(bracket);
+      else qb.andWhere(bracket);
+    };
+
+    if (node === null || typeof node !== 'object' || Array.isArray(node)) {
+      throw new BadRequestException('Invalid search condition');
+    }
+
+    for (const [key, value] of Object.entries(node)) {
+      if (key === '$and') {
+        if (!Array.isArray(value)) throw new BadRequestException('$and expects an array');
+        attach(inner => value.forEach((child: any) => this.buildSearch(inner, child, '$and', counter)));
+      } else if (key === '$or') {
+        if (!Array.isArray(value)) throw new BadRequestException('$or expects an array');
+        attach(inner => value.forEach((child: any) => this.buildSearch(inner, child, '$or', counter)));
+      } else {
+        // field condition: primitive => $eq, object => one clause per operator
+        attach(inner => {
+          if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+            for (const [op, opValue] of Object.entries(value as Record<string, any>)) {
+              const { clause, params } = this.buildCondition(key, op, opValue, counter);
+              inner.andWhere(clause, params);
+            }
+          } else {
+            const { clause, params } = this.buildCondition(key, '$eq', value, counter);
+            inner.andWhere(clause, params);
+          }
+        });
+      }
     }
   }
 
@@ -221,8 +274,15 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
 
         // Apply join conditions
         if (join.on && join.on.length > 0) {
-          join.on.forEach((condition, index) => {
-            this.addWhereCondition(queryBuilder, condition, `join_${join.field}_${index}`);
+          const counter = { n: 1000 }; // distinct param space from applyWhere
+          join.on.forEach(condition => {
+            const { clause, params } = this.buildCondition(
+              `${alias}.${condition.field.replace(`${alias}.`, '')}`,
+              condition.operator,
+              condition.value,
+              counter
+            );
+            queryBuilder.andWhere(clause, params);
           });
         }
       });
@@ -265,84 +325,88 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   }
 
   /**
-   * Add a WHERE condition to the query builder
+   * Resolve a search field to a SQL identifier. Plain fields address the
+   * root alias; single-dot fields address a join alias when that join was
+   * applied (deeper nesting is join-parity work, #18).
    */
-  protected addWhereCondition(
-    queryBuilder: SelectQueryBuilder<T>,
-    condition: FilterCondition,
-    paramKey: string
-  ): void {
-    const whereClause = this.buildWhereCondition(condition, paramKey);
-    const parameters = { [paramKey]: condition.value };
-
-    queryBuilder.andWhere(whereClause, parameters);
-  }
-
-  /**
-   * Build a WHERE condition string based on the filter operator
-   */
-  protected buildWhereCondition(condition: FilterCondition, paramKey: string): string {
-    const field = `entity.${condition.field}`;
-    const param = `:${paramKey}`;
-
-    switch (condition.operator) {
-      case '$eq':
-        return `${field} = ${param}`;
-      case '$ne':
-        return `${field} != ${param}`;
-      case '$gt':
-        return `${field} > ${param}`;
-      case '$gte':
-        return `${field} >= ${param}`;
-      case '$lt':
-        return `${field} < ${param}`;
-      case '$lte':
-        return `${field} <= ${param}`;
-      case '$starts':
-        return `${field} LIKE ${param}`;
-      case '$ends':
-        return `${field} LIKE ${param}`;
-      case '$cont':
-        return `${field} LIKE ${param}`;
-      case '$excl':
-        return `${field} NOT LIKE ${param}`;
-      case '$in':
-        return `${field} IN (${param})`;
-      case '$notin':
-        return `${field} NOT IN (${param})`;
-      case '$isnull':
-        return `${field} IS NULL`;
-      case '$notnull':
-        return `${field} IS NOT NULL`;
-      case '$between':
-        return `${field} BETWEEN ${param}[0] AND ${param}[1]`;
-      case '$eqL':
-        return `LOWER(${field}) = LOWER(${param})`;
-      case '$neL':
-        return `LOWER(${field}) != LOWER(${param})`;
-      case '$startsL':
-        return `LOWER(${field}) LIKE LOWER(${param})`;
-      case '$endsL':
-        return `LOWER(${field}) LIKE LOWER(${param})`;
-      case '$contL':
-        return `LOWER(${field}) LIKE LOWER(${param})`;
-      case '$exclL':
-        return `LOWER(${field}) NOT LIKE LOWER(${param})`;
-      case '$inL':
-        return `LOWER(${field}) IN (${param})`;
-      case '$notinL':
-        return `LOWER(${field}) NOT IN (${param})`;
-      default:
-        return `${field} = ${param}`;
+  protected resolveField(field: string): string {
+    if (!field.includes('.')) {
+      return `entity.${field}`;
     }
+    return field; // '<joinAlias>.<column>' — aliases are registered by applyJoins
   }
 
   /**
-   * Apply search conditions (complex nested conditions)
+   * Build one SQL condition with correctly bound parameters.
+   * LIKE wildcard wrapping happens here (not in the parser), so `filter=`
+   * and `s=` behave identically for the same operator.
    */
-  protected applySearchConditions(queryBuilder: SelectQueryBuilder<T>, search: any): void {
-    // Implementation for complex search conditions would go here
-    // This is a simplified version
-    console.warn('Complex search conditions not yet implemented');
+  protected buildCondition(
+    field: string,
+    operator: string,
+    value: any,
+    counter: { n: number }
+  ): { clause: string; params: Record<string, any> } {
+    const col = this.resolveField(field);
+    const key = `p${counter.n++}`;
+    const p = `:${key}`;
+
+    const requireArray = () => {
+      if (!Array.isArray(value) || value.length === 0) {
+        throw new BadRequestException(`${operator} expects a non-empty array`);
+      }
+    };
+
+    switch (operator) {
+      case '$eq':      return { clause: `${col} = ${p}`,  params: { [key]: value } };
+      case '$ne':      return { clause: `${col} != ${p}`, params: { [key]: value } };
+      case '$gt':      return { clause: `${col} > ${p}`,  params: { [key]: value } };
+      case '$gte':     return { clause: `${col} >= ${p}`, params: { [key]: value } };
+      case '$lt':      return { clause: `${col} < ${p}`,  params: { [key]: value } };
+      case '$lte':     return { clause: `${col} <= ${p}`, params: { [key]: value } };
+      case '$starts':  return { clause: `${col} LIKE ${p}`,     params: { [key]: `${value}%` } };
+      case '$ends':    return { clause: `${col} LIKE ${p}`,     params: { [key]: `%${value}` } };
+      case '$cont':    return { clause: `${col} LIKE ${p}`,     params: { [key]: `%${value}%` } };
+      case '$excl':    return { clause: `${col} NOT LIKE ${p}`, params: { [key]: `%${value}%` } };
+      case '$in':
+        requireArray();
+        return { clause: `${col} IN (:...${key})`, params: { [key]: value } };
+      case '$notin':
+        requireArray();
+        return { clause: `${col} NOT IN (:...${key})`, params: { [key]: value } };
+      case '$isnull':  return { clause: `${col} IS NULL`, params: {} };
+      case '$notnull': return { clause: `${col} IS NOT NULL`, params: {} };
+      case '$between': {
+        requireArray();
+        if (value.length !== 2) {
+          throw new BadRequestException('$between expects exactly two values');
+        }
+        const key2 = `p${counter.n++}`;
+        return {
+          clause: `${col} BETWEEN ${p} AND :${key2}`,
+          params: { [key]: value[0], [key2]: value[1] }
+        };
+      }
+      case '$eqL':     return { clause: `LOWER(${col}) = ${p}`,  params: { [key]: String(value).toLowerCase() } };
+      case '$neL':     return { clause: `LOWER(${col}) != ${p}`, params: { [key]: String(value).toLowerCase() } };
+      case '$startsL': return { clause: `LOWER(${col}) LIKE ${p}`,     params: { [key]: `${String(value).toLowerCase()}%` } };
+      case '$endsL':   return { clause: `LOWER(${col}) LIKE ${p}`,     params: { [key]: `%${String(value).toLowerCase()}` } };
+      case '$contL':   return { clause: `LOWER(${col}) LIKE ${p}`,     params: { [key]: `%${String(value).toLowerCase()}%` } };
+      case '$exclL':   return { clause: `LOWER(${col}) NOT LIKE ${p}`, params: { [key]: `%${String(value).toLowerCase()}%` } };
+      case '$inL':
+        requireArray();
+        return {
+          clause: `LOWER(${col}) IN (:...${key})`,
+          params: { [key]: value.map((v: any) => String(v).toLowerCase()) }
+        };
+      case '$notinL':
+        requireArray();
+        return {
+          clause: `LOWER(${col}) NOT IN (:...${key})`,
+          params: { [key]: value.map((v: any) => String(v).toLowerCase()) }
+        };
+      default:
+        throw new BadRequestException(`Unknown filter operator: ${operator}`);
+    }
   }
 }

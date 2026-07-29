@@ -35,10 +35,24 @@ export class CrudRequestParser {
 
   /**
    * Parse HTTP query parameters into a structured ParsedRequest
+   *
+   * `authContext` carries pre-evaluated auth conditions (from the
+   * interceptor's CrudAuthOptions handling). Mirroring nestjsx/crud, the
+   * final parsed.search is a single tree:
+   *   auth.or  ? { $or: [authOr, { $and: [...] }] }
+   *            : { $and: [authFilter, paramsSearch..., optionsFilter, querySearch] }
+   * so services build WHERE from parsed.search alone and user-supplied
+   * params can never widen an auth filter.
    */
-  parse(query: any, params: any = {}): ParsedRequest {
+  parse(
+    query: any,
+    params: any = {},
+    authContext: { filter?: SearchCondition; or?: SearchCondition; persist?: Record<string, any> } = {}
+  ): ParsedRequest {
     const parsedQuery = this.parseQuery(query);
     const parsedParams = this.parseParams(params);
+
+    const search = this.buildSearchTree(parsedQuery, parsedParams, authContext);
 
     return {
       query: parsedQuery,
@@ -46,7 +60,8 @@ export class CrudRequestParser {
       parsed: {
         fields: parsedQuery.fields || [],
         paramsFilter: parsedParams,
-        search: parsedQuery.search || {},
+        authPersist: authContext.persist || undefined,
+        search,
         filter: parsedQuery.filter || [],
         or: parsedQuery.or || [],
         join: parsedQuery.join || [],
@@ -57,6 +72,81 @@ export class CrudRequestParser {
         cache: parsedQuery.cache || 0
       }
     };
+  }
+
+  /**
+   * Merge params, options filter, query search/filter/or, and auth
+   * conditions into the single nestjsx-shaped search tree.
+   */
+  private buildSearchTree(
+    parsedQuery: CrudRequestQuery,
+    paramsFilter: FilterCondition[],
+    authContext: { filter?: SearchCondition; or?: SearchCondition }
+  ): SearchCondition {
+    const and: SearchCondition[] = [];
+
+    // Route params (e.g. :id) always constrain the query
+    paramsFilter.forEach(c => and.push(this.conditionToSearch(c)));
+
+    // Server-side default filters from options.query.filter
+    const optionsFilter = this.options.query?.filter;
+    if (Array.isArray(optionsFilter)) {
+      optionsFilter.forEach((c: any) => {
+        if (c && c.field && c.operator) and.push(this.conditionToSearch(c));
+      });
+    } else if (optionsFilter && typeof optionsFilter === 'object') {
+      and.push(optionsFilter as SearchCondition);
+    }
+
+    // Query-string conditions: `s` wins over filter/or, per nestjsx
+    const querySearch = this.querySearch(parsedQuery);
+    if (querySearch) and.push(querySearch);
+
+    if (authContext.or) {
+      // auth.or is ORed against everything else
+      return and.length > 0
+        ? { $or: [authContext.or, { $and: and }] }
+        : { $or: [authContext.or] };
+    }
+
+    if (authContext.filter) and.unshift(authContext.filter);
+
+    if (and.length === 0) return {};
+    if (and.length === 1) return and[0];
+    return { $and: and };
+  }
+
+  /**
+   * The filter/or truth table from nestjsx/crud:
+   * - s present: s (filter/or ignored)
+   * - filter & or: (AND filters) OR (AND ors)
+   * - filter only: AND filters
+   * - or only: OR ors
+   */
+  private querySearch(parsedQuery: CrudRequestQuery): SearchCondition | null {
+    if (parsedQuery.search && Object.keys(parsedQuery.search).length > 0) {
+      return parsedQuery.search;
+    }
+    const filters = (parsedQuery.filter || []).map(c => this.conditionToSearch(c));
+    const ors = (parsedQuery.or || []).map(c => this.conditionToSearch(c));
+
+    if (filters.length > 0 && ors.length > 0) {
+      const left = filters.length === 1 ? filters[0] : { $and: filters };
+      const right = ors.length === 1 ? ors[0] : { $and: ors };
+      return { $or: [left, right] };
+    }
+    if (filters.length > 0) {
+      return filters.length === 1 ? filters[0] : { $and: filters };
+    }
+    if (ors.length > 0) {
+      return ors.length === 1 ? ors[0] : { $or: ors };
+    }
+    return null;
+  }
+
+  /** Convert a FilterCondition into its search-object form */
+  private conditionToSearch(c: FilterCondition): SearchCondition {
+    return { [c.field]: { [c.operator]: c.value } };
   }
 
   /**
@@ -163,10 +253,21 @@ export class CrudRequestParser {
 
   /**
    * Parse a single filter condition string
-   * Format: field||operator||value
+   * Format: field||operator||value, or field||operator for valueless
+   * operators ($isnull / $notnull), matching nestjsx/crud.
    */
   private parseFilterCondition(filterStr: string): FilterCondition | null {
     const parts = filterStr.split('||');
+
+    if (parts.length === 2) {
+      const [field, operator] = parts;
+      const op = operator.trim() as FilterOperator;
+      if (op !== '$isnull' && op !== '$notnull') {
+        return null;
+      }
+      return { field: field.trim(), operator: op, value: undefined };
+    }
+
     if (parts.length !== 3) {
       return null;
     }
@@ -265,23 +366,32 @@ export class CrudRequestParser {
   }
 
   /**
-   * Parse route parameters (e.g., :id from /users/:id)
+   * Parse route parameters (e.g., :id from /users/:id).
+   *
+   * Matching nestjsx/crud: ONLY params configured in options.params become
+   * filters. Turning arbitrary route params into WHERE conditions would
+   * poison queries with non-entity params (e.g. a workspaceId path
+   * segment). When no params are configured, `id` is the sole default.
    */
   private parseParams(params: any): FilterCondition[] {
     const result: FilterCondition[] = [];
+    const configured = this.options.params;
 
     Object.entries(params).forEach(([key, value]) => {
-      if (value !== undefined && value !== null) {
-        // Default to id field, but can be configured via options
-        const fieldMapping = this.options.params?.[key];
-        const field = fieldMapping?.field || key;
+      if (value === undefined || value === null) return;
 
-        result.push({
-          field,
-          operator: '$eq',
-          value: this.parseValue(String(value), '$eq')
-        });
-      }
+      const fieldMapping = configured?.[key];
+      if (configured && !fieldMapping) return; // unconfigured param: ignore
+      if (!configured && key !== 'id') return; // default: only :id
+
+      const field = fieldMapping?.field || key;
+      const raw = String(value);
+      const parsed =
+        fieldMapping?.type === 'string' || fieldMapping?.type === 'uuid'
+          ? raw
+          : this.parseValue(raw, '$eq');
+
+      result.push({ field, operator: '$eq', value: parsed });
     });
 
     return result;
@@ -298,36 +408,31 @@ export class CrudRequestParser {
 
     // Handle arrays for IN operations
     if (operator === '$in' || operator === '$notin' || operator === '$inL' || operator === '$notinL') {
-      return value.split(',').map(v => v.trim());
+      return value.split(',').map(v => this.coerceScalar(v.trim()));
     }
 
-    // Handle LIKE operations
-    if (operator.includes('starts')) {
-      return `${value}%`;
-    }
-    if (operator.includes('ends')) {
-      return `%${value}`;
-    }
-    if (operator.includes('cont')) {
-      return `%${value}%`;
-    }
+    // NOTE: LIKE wildcard wrapping ($starts/$ends/$cont/$excl) happens in
+    // the SQL builder (crud-typeorm), NOT here — matching nestjsx/crud.
+    // Values arriving via the `s` JSON param never pass through this
+    // method, so wrapping here would make filter= and s= behave
+    // differently for the same operator.
 
     // Handle BETWEEN operations
     if (operator === '$between') {
-      return value.split(',').map(v => v.trim());
+      return value.split(',').map(v => this.coerceScalar(v.trim()));
     }
 
-    // Try to parse as number
+    return this.coerceScalar(value);
+  }
+
+  /** Coerce a raw query-string scalar: number, boolean, else string */
+  private coerceScalar(value: string): any {
     const numValue = Number(value);
     if (!isNaN(numValue) && value !== '') {
       return numValue;
     }
-
-    // Try to parse as boolean
     if (value.toLowerCase() === 'true') return true;
     if (value.toLowerCase() === 'false') return false;
-
-    // Return as string
     return value;
   }
 }

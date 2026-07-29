@@ -36,8 +36,26 @@ export class CrudRequestInterceptor implements NestInterceptor {
     // Create parser with options
     const parser = new CrudRequestParser(crudOptions);
 
+    // Evaluate CrudAuthOptions against the request. The resulting filter is
+    // ANDed at the top of the search tree (or `or` is ORed against it), so
+    // user-supplied query params can never widen an auth restriction.
+    const auth = crudOptions.auth;
+    const authContext: { filter?: any; or?: any; persist?: any } = {};
+    if (auth) {
+      const subject = auth.property ? request[auth.property] : request;
+      if (typeof auth.or === 'function') {
+        authContext.or = auth.or(subject) || undefined;
+      }
+      if (!authContext.or && typeof auth.filter === 'function') {
+        authContext.filter = auth.filter(subject) || undefined;
+      }
+      if (typeof auth.persist === 'function') {
+        authContext.persist = auth.persist(subject) || undefined;
+      }
+    }
+
     // Parse the request
-    const parsedRequest = parser.parse(request.query, request.params);
+    const parsedRequest = parser.parse(request.query, request.params, authContext);
 
     // Attach parsed request to the request object
     request[PARSED_CRUD_REQUEST_KEY] = parsedRequest;

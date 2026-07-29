@@ -131,18 +131,46 @@ describe('TypeOrmCrudService', () => {
       ]);
     });
 
-    it('should apply filter conditions', async () => {
+    it('builds WHERE from the search tree (Brackets)', async () => {
       const parsedRequest: ParsedRequest = {
         query: {},
         options: {},
         parsed: {
           fields: [],
           paramsFilter: [],
+          search: {
+            $and: [{ status: { $eq: 'Active' } }, { id: { $gt: 5 } }]
+          },
+          filter: [],
+          or: [],
+          join: [],
+          sort: [],
+          limit: 20,
+          offset: 0,
+          page: 1,
+          cache: 0
+        }
+      };
+
+      (mockQueryBuilder.getManyAndCount as jest.Mock).mockResolvedValue([[], 0]);
+
+      await service.getMany(parsedRequest);
+
+      // The search tree is applied as a single top-level Brackets andWhere
+      const calls = (mockQueryBuilder.andWhere as jest.Mock).mock.calls;
+      expect(calls.length).toBe(1);
+      expect(calls[0][0]?.constructor?.name).toBe('Brackets');
+    });
+
+    it('applies paramsFilter when search is empty (id targeting)', async () => {
+      const parsedRequest: ParsedRequest = {
+        query: {},
+        options: {},
+        parsed: {
+          fields: [],
+          paramsFilter: [{ field: 'id', operator: '$eq', value: 42 }],
           search: {},
-          filter: [
-            { field: 'status', operator: '$eq', value: 'Active' },
-            { field: 'id', operator: '$gt', value: 5 }
-          ],
+          filter: [],
           or: [],
           join: [],
           sort: [],
@@ -158,12 +186,8 @@ describe('TypeOrmCrudService', () => {
       await service.getMany(parsedRequest);
 
       expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith(
-        'entity.status = :filter_0',
-        { filter_0: 'Active' }
-      );
-      expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith(
-        'entity.id > :filter_1',
-        { filter_1: 5 }
+        'entity.id = :p0',
+        { p0: 42 }
       );
     });
 
@@ -343,35 +367,56 @@ describe('TypeOrmCrudService', () => {
     });
   });
 
-  describe('buildWhereCondition', () => {
-    it('should build correct WHERE conditions for different operators', () => {
-      const testCases = [
-        { operator: '$eq', expected: 'entity.field = :param' },
-        { operator: '$ne', expected: 'entity.field != :param' },
-        { operator: '$gt', expected: 'entity.field > :param' },
-        { operator: '$gte', expected: 'entity.field >= :param' },
-        { operator: '$lt', expected: 'entity.field < :param' },
-        { operator: '$lte', expected: 'entity.field <= :param' },
-        { operator: '$starts', expected: 'entity.field LIKE :param' },
-        { operator: '$ends', expected: 'entity.field LIKE :param' },
-        { operator: '$cont', expected: 'entity.field LIKE :param' },
-        { operator: '$in', expected: 'entity.field IN (:param)' },
-        { operator: '$isnull', expected: 'entity.field IS NULL' },
-        { operator: '$notnull', expected: 'entity.field IS NOT NULL' },
-        { operator: '$eqL', expected: 'LOWER(entity.field) = LOWER(:param)' },
-        { operator: '$contL', expected: 'LOWER(entity.field) LIKE LOWER(:param)' }
-      ];
+  describe('buildCondition', () => {
+    const build = (operator: string, value: any = 'value') =>
+      (service as any).buildCondition('field', operator, value, { n: 0 });
 
-      testCases.forEach(({ operator, expected }) => {
-        const condition: FilterCondition = {
-          field: 'field',
-          operator: operator as any,
-          value: 'value'
-        };
+    it('builds scalar operator clauses with bound params', () => {
+      expect(build('$eq')).toEqual({ clause: 'entity.field = :p0', params: { p0: 'value' } });
+      expect(build('$ne')).toEqual({ clause: 'entity.field != :p0', params: { p0: 'value' } });
+      expect(build('$gt', 5)).toEqual({ clause: 'entity.field > :p0', params: { p0: 5 } });
+      expect(build('$lte', 5)).toEqual({ clause: 'entity.field <= :p0', params: { p0: 5 } });
+    });
 
-        const result = (service as any).buildWhereCondition(condition, 'param');
-        expect(result).toBe(expected);
+    it('wraps LIKE values at build time', () => {
+      expect(build('$starts', 'Jo')).toEqual({ clause: 'entity.field LIKE :p0', params: { p0: 'Jo%' } });
+      expect(build('$ends', 'hn')).toEqual({ clause: 'entity.field LIKE :p0', params: { p0: '%hn' } });
+      expect(build('$cont', 'oh')).toEqual({ clause: 'entity.field LIKE :p0', params: { p0: '%oh%' } });
+      expect(build('$excl', 'oh')).toEqual({ clause: 'entity.field NOT LIKE :p0', params: { p0: '%oh%' } });
+      expect(build('$contL', 'OH')).toEqual({ clause: 'LOWER(entity.field) LIKE :p0', params: { p0: '%oh%' } });
+    });
+
+    it('binds arrays with the TypeORM spread syntax', () => {
+      expect(build('$in', ['a', 'b'])).toEqual({
+        clause: 'entity.field IN (:...p0)',
+        params: { p0: ['a', 'b'] }
       });
+      expect(build('$notin', [1, 2])).toEqual({
+        clause: 'entity.field NOT IN (:...p0)',
+        params: { p0: [1, 2] }
+      });
+      expect(build('$inL', ['A', 'B'])).toEqual({
+        clause: 'LOWER(entity.field) IN (:...p0)',
+        params: { p0: ['a', 'b'] }
+      });
+    });
+
+    it('binds $between as two params', () => {
+      expect(build('$between', [1, 10])).toEqual({
+        clause: 'entity.field BETWEEN :p0 AND :p1',
+        params: { p0: 1, p1: 10 }
+      });
+    });
+
+    it('emits valueless clauses for null checks', () => {
+      expect(build('$isnull', undefined)).toEqual({ clause: 'entity.field IS NULL', params: {} });
+      expect(build('$notnull', undefined)).toEqual({ clause: 'entity.field IS NOT NULL', params: {} });
+    });
+
+    it('rejects empty arrays and unknown operators with 400', () => {
+      expect(() => build('$in', [])).toThrow('$in expects a non-empty array');
+      expect(() => build('$between', [1])).toThrow('$between expects exactly two values');
+      expect(() => build('$bogus')).toThrow('Unknown filter operator: $bogus');
     });
   });
 });

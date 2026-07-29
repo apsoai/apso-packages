@@ -81,12 +81,15 @@ describe('CrudRequestParser', () => {
       ]);
     });
 
-    it('should parse LIKE operators with wildcards', () => {
+    it('keeps LIKE operator values raw (wildcard wrapping happens in the SQL builder)', () => {
+      // Wrapping at parse time would make filter= and s= behave differently
+      // for the same operator, because s= values never pass the parser's
+      // value coercion. nestjsx wraps at SQL build; so do we.
       const testCases = [
-        { filter: 'name||$starts||John', expected: 'John%' },
-        { filter: 'name||$ends||son', expected: '%son' },
-        { filter: 'name||$cont||oh', expected: '%oh%' },
-        { filter: 'name||$contL||OH', expected: '%OH%' }
+        { filter: 'name||$starts||John', expected: 'John' },
+        { filter: 'name||$ends||son', expected: 'son' },
+        { filter: 'name||$cont||oh', expected: 'oh' },
+        { filter: 'name||$contL||OH', expected: 'OH' }
       ];
 
       testCases.forEach(testCase => {
@@ -95,6 +98,50 @@ describe('CrudRequestParser', () => {
 
         expect(result.parsed.filter[0].value).toBe(testCase.expected);
       });
+    });
+
+    it('accepts two-part valueless conditions ($isnull/$notnull)', () => {
+      const result = parser.parse({ filter: 'deletedAt||$isnull' });
+      expect(result.parsed.filter[0]).toEqual({
+        field: 'deletedAt',
+        operator: '$isnull',
+        value: undefined
+      });
+    });
+
+    it('builds the merged search tree: (AND filters) OR (AND ors)', () => {
+      const result = parser.parse({
+        filter: ['status||$eq||Active', 'age||$gt||21'],
+        or: ['role||$eq||admin', 'role||$eq||owner']
+      });
+      expect(result.parsed.search).toEqual({
+        $or: [
+          { $and: [{ status: { $eq: 'Active' } }, { age: { $gt: 21 } }] },
+          { $and: [{ role: { $eq: 'admin' } }, { role: { $eq: 'owner' } }] }
+        ]
+      });
+    });
+
+    it('ANDs the auth filter at the top of the search tree', () => {
+      const result = parser.parse(
+        { filter: 'status||$eq||Active' },
+        {},
+        { filter: { workspaceId: { $eq: 42 } } }
+      );
+      expect(result.parsed.search).toEqual({
+        $and: [{ workspaceId: { $eq: 42 } }, { status: { $eq: 'Active' } }]
+      });
+    });
+
+    it('only configured route params become paramsFilter', () => {
+      const p = new CrudRequestParser({
+        params: { id: { field: 'id', type: 'number', primary: true } }
+      });
+      const result = p.parse({}, { id: '7', workspaceId: '99' });
+      expect(result.parsed.paramsFilter).toEqual([
+        { field: 'id', operator: '$eq', value: 7 }
+      ]);
+      expect(result.parsed.search).toEqual({ id: { $eq: 7 } });
     });
 
     it('should parse numeric values correctly', () => {

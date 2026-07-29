@@ -85,6 +85,23 @@ export interface ParsedRequest {
   };
 }
 
+/**
+ * Access-control options, nestjsx/crud-compatible.
+ *
+ * `filter` returns a SearchCondition that is ANDed at the TOP level of the
+ * final search tree, so user-supplied filter/or/s params can never widen it.
+ * `or` (when present) is ORed against the rest of the search tree instead.
+ * `persist` returns fields force-set on create/update/replace DTOs.
+ * `property` selects what is passed to the callbacks (e.g. 'user' passes
+ * req.user); when omitted the whole request object is passed.
+ */
+export interface CrudAuthOptions {
+  property?: string;
+  filter?: (userOrRequest: any) => SearchCondition | void;
+  or?: (userOrRequest: any) => SearchCondition | void;
+  persist?: (userOrRequest: any) => Record<string, any> | void;
+}
+
 export interface CrudRequestOptions {
   query?: {
     allow?: string[];
@@ -108,4 +125,5 @@ export interface CrudRequestOptions {
       primary?: boolean;
     };
   };
+  auth?: CrudAuthOptions;
 }
