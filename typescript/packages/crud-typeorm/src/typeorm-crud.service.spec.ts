@@ -128,10 +128,11 @@ describe('TypeOrmCrudService', () => {
       await service.getMany(parsedRequest);
 
       // Verify that duplicates are removed
+      // PK always included (nestjsx behavior), duplicates removed (#777)
       expect(mockQueryBuilder.select).toHaveBeenCalledWith([
+        'entity.id',
         'entity.name',
         'entity.status'
-        // 'entity.name' should not appear twice
       ]);
     });
 
@@ -228,7 +229,8 @@ describe('TypeOrmCrudService', () => {
     it('should apply join conditions', async () => {
       const parsedRequest: ParsedRequest = {
         query: {},
-        options: {},
+        // joins are only honored from the options allowlist (nestjsx)
+        options: { query: { join: { facilities: {}, customer: {} } } },
         parsed: {
           fields: [],
           paramsFilter: [],

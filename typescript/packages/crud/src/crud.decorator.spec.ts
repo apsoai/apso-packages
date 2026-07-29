@@ -60,9 +60,10 @@ describe('Crud Decorator', () => {
   });
 
   it('should apply Controller decorator', () => {
+    // @Crud deliberately does NOT apply @Controller (nestjsx semantics:
+    // the consumer's own @Controller('path') owns the mount path).
     const controllerMetadata = Reflect.getMetadata('path', TestController);
-    // Controller decorator should be applied (path metadata exists)
-    expect(controllerMetadata).toBeDefined();
+    expect(controllerMetadata).toBeUndefined();
   });
 
   it('should store CRUD options in metadata', () => {

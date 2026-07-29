@@ -7,7 +7,7 @@
  *   '@nestjsx/crud-typeorm' -> '@apso/crud-typeorm'
  */
 import { Body, Req } from '@nestjs/common';
-import { ParsedRequest as ParsedRequestType } from '@apso/crud-core';
+import { ParsedRequest as ParsedRequestType, CrudAuthOptions, CRUD_AUTH_OPTIONS_METADATA } from '@apso/crud-core';
 import { extractParsedRequest } from '@apso/crud-request';
 
 /** nestjsx name for the parsed request type. */
@@ -140,4 +140,17 @@ export function findOverride(proto: any, baseName: BaseRouteName): string | unde
     }
   }
   return undefined;
+}
+
+/**
+ * nestjsx @CrudAuth: class decorator carrying the access-control options.
+ * Stored under its own metadata key (order-independent with @Crud); the
+ * request interceptor merges it with any options.auth, options.auth
+ * winning when both are present.
+ */
+export function CrudAuth(options: CrudAuthOptions): ClassDecorator {
+  return (target: any) => {
+    Reflect.defineMetadata(CRUD_AUTH_OPTIONS_METADATA, options, target);
+    return target;
+  };
 }

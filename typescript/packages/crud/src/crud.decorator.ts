@@ -40,8 +40,9 @@ export function Crud(options: CrudControllerOptions): ClassDecorator {
     SetMetadata(CRUD_OPTIONS_METADATA, options)(target);
     SetMetadata(CRUD_CONTROLLER_METADATA, true)(target);
 
-    // Apply controller decorator
-    Controller()(target);
+    // NOTE: unlike an earlier draft, @Crud does NOT apply @Controller —
+    // nestjsx semantics: the consumer's own @Controller('path') owns the
+    // mount path, and applying Controller() here would clobber it.
 
     // Apply interceptor for request parsing
     UseInterceptors(CrudRequestInterceptor)(target);

@@ -14,6 +14,7 @@ export { CrudControllerBase } from './crud-controller.base';
 // `ParsedRequest` is the parameter DECORATOR; the request type is
 // `CrudRequest`.
 export {
+  CrudAuth,
   Override,
   ParsedRequest,
   ParsedBody,
