@@ -133,6 +133,11 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   }
 
   async createMany(req: ParsedRequest, dto: CreateManyDto<T>): Promise<CreateManyResponse<T>> {
+    // nestjsx validates bulk as a non-empty array (class-validator
+    // @ArrayNotEmpty) and 400s an empty payload (#45).
+    if (!dto || !Array.isArray(dto.bulk) || dto.bulk.length === 0) {
+      throw new BadRequestException('Empty bulk array');
+    }
     const bulk = (dto.bulk as any[]).map(item => this.withAuthPersist(req, item));
     const entities = this.repository.create(bulk);
     return await this.repository.save(entities) as T[];

@@ -376,6 +376,17 @@ describe('TypeOrmCrudService', () => {
     });
   });
 
+  describe('createMany empty-bulk guard (#45)', () => {
+    const emptyReq: ParsedRequest = {
+      query: {}, options: {},
+      parsed: { fields: [], paramsFilter: [], search: {}, filter: [], or: [], join: [], sort: [], limit: 20, offset: 0, page: 1, cache: 0 }
+    };
+    it('400s an empty bulk array', async () => {
+      await expect(service.createMany(emptyReq, { bulk: [] } as any)).rejects.toThrow('Empty bulk array');
+      await expect(service.createMany(emptyReq, {} as any)).rejects.toThrow('Empty bulk array');
+    });
+  });
+
   describe('primary-key safety on mutations (#43)', () => {
     const reqTargeting = (id: number): ParsedRequest => ({
       query: {},
