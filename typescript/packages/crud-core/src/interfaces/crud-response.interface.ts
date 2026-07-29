@@ -1,19 +1,17 @@
 /**
- * Core interfaces for CRUD response structures
+ * Core interfaces for CRUD response structures.
  *
- * These interfaces ensure consistent response formats across all CRUD operations,
- * maintaining compatibility with existing nestjsx/crud consumers.
+ * These mirror nestjsx/crud's actual wire shapes:
+ * - getMany returns the pagination envelope ONLY when paginated
+ *   (options.query.alwaysPaginate, or page/offset present on the request);
+ *   otherwise it returns a bare T[].
+ * - getOne / createOne / updateOne / replaceOne / recoverOne return the
+ *   bare entity, createMany a bare T[], deleteOne void (or the deleted
+ *   entity when configured with returnDeleted).
  */
 
-export interface CrudResponse<T = any> {
-  data: T | T[];
-  count?: number;
-  total?: number;
-  page?: number;
-  pageCount?: number;
-}
-
-export interface GetManyResponse<T = any> extends CrudResponse<T[]> {
+/** nestjsx-compatible pagination envelope (same name as nestjsx). */
+export interface GetManyDefaultResponse<T = any> {
   data: T[];
   count: number;
   total: number;
@@ -21,33 +19,21 @@ export interface GetManyResponse<T = any> extends CrudResponse<T[]> {
   pageCount: number;
 }
 
-export interface GetOneResponse<T = any> extends CrudResponse<T> {
-  data: T;
-}
+export type GetManyResponse<T = any> = GetManyDefaultResponse<T> | T[];
 
-export interface CreateOneResponse<T = any> extends CrudResponse<T> {
-  data: T;
-}
+export type GetOneResponse<T = any> = T;
+export type CreateOneResponse<T = any> = T;
+export type CreateManyResponse<T = any> = T[];
+export type UpdateOneResponse<T = any> = T;
+export type ReplaceOneResponse<T = any> = T;
+export type DeleteOneResponse<T = any> = void | T;
+export type RecoverOneResponse<T = any> = T;
 
-export interface CreateManyResponse<T = any> extends CrudResponse<T[]> {
-  data: T[];
-}
-
-export interface UpdateOneResponse<T = any> extends CrudResponse<T> {
-  data: T;
-}
-
-export interface ReplaceOneResponse<T = any> extends CrudResponse<T> {
-  data: T;
-}
-
-export interface DeleteOneResponse {
-  data?: any;
-  message?: string;
-}
-
-export interface RecoverOneResponse<T = any> extends CrudResponse<T> {
-  data: T;
+/** Type guard for the paginated getMany envelope. */
+export function isGetManyDefaultResponse<T>(
+  result: GetManyResponse<T>
+): result is GetManyDefaultResponse<T> {
+  return !Array.isArray(result);
 }
 
 export interface CrudResponseMetadata {

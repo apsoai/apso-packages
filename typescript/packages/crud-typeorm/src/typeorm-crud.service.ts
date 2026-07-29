@@ -5,7 +5,7 @@
  * with enhanced features and bug fixes (including the duplicate field selection issue).
  */
 
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Brackets, Repository, SelectQueryBuilder, EntityTarget, ObjectLiteral, WhereExpressionBuilder } from 'typeorm';
 import {
   CrudService,
@@ -60,9 +60,25 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     this.applySelect(queryBuilder, req);
     this.applyWhere(queryBuilder, req, aliases);
     this.applySort(queryBuilder, req, aliases);
-    this.applyPagination(queryBuilder, req);
 
-    // Execute queries
+    const paginated = this.decidePagination(req);
+
+    if (!paginated) {
+      // Not paginated: bare array, no COUNT round-trip (nestjsx behavior).
+      // A requested limit still applies to the bare array.
+      if (req.query?.limit !== undefined || this.options.query?.limit) {
+        const maxLimit = this.options.query?.maxLimit || 100;
+        const actualLimit = Math.min(
+          req.parsed.limit || this.options.query?.limit || 20,
+          maxLimit
+        );
+        if (aliases.size > 0) queryBuilder.take(actualLimit);
+        else queryBuilder.limit(actualLimit);
+      }
+      return queryBuilder.getMany();
+    }
+
+    this.applyPagination(queryBuilder, req, aliases.size > 0);
     const [data, total] = await queryBuilder.getManyAndCount();
 
     const limit = req.parsed.limit || this.options.query?.limit || 20;
@@ -78,6 +94,18 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     };
   }
 
+  /**
+   * nestjsx pagination decision: envelope + LIMIT only when the request
+   * asked for a page/offset/limit or the service forces pagination.
+   */
+  protected decidePagination(req: ParsedRequest): boolean {
+    if (this.options.query?.alwaysPaginate) return true;
+    // nestjsx: only page/offset trigger the envelope; a bare ?limit= does
+    // not (it just caps the bare array).
+    const q = req.query || {};
+    return q.page !== undefined || q.offset !== undefined;
+  }
+
   async getOne(req: ParsedRequest): Promise<GetOneResponse<T>> {
     const queryBuilder = this.repository.createQueryBuilder('entity');
 
@@ -88,23 +116,21 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     const entity = await queryBuilder.getOne();
 
     if (!entity) {
-      throw new Error('Entity not found');
+      throw new NotFoundException('Entity not found');
     }
 
-    return { data: entity };
+    return entity;
   }
 
   async createOne(req: ParsedRequest, dto: DeepPartial<T>): Promise<CreateOneResponse<T>> {
     const entity = this.repository.create(this.withAuthPersist(req, dto) as any);
-    const saved = await this.repository.save(entity) as unknown as T;
-    return { data: saved };
+    return await this.repository.save(entity) as unknown as T;
   }
 
   async createMany(req: ParsedRequest, dto: CreateManyDto<T>): Promise<CreateManyResponse<T>> {
     const bulk = (dto.bulk as any[]).map(item => this.withAuthPersist(req, item));
     const entities = this.repository.create(bulk);
-    const saved = await this.repository.save(entities) as T[];
-    return { data: saved };
+    return await this.repository.save(entities) as T[];
   }
 
   async updateOne(req: ParsedRequest, dto: DeepPartial<T>): Promise<UpdateOneResponse<T>> {
@@ -113,13 +139,12 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
 
     const entity = await queryBuilder.getOne();
     if (!entity) {
-      throw new Error('Entity not found');
+      throw new NotFoundException('Entity not found');
     }
 
-    const updated = await this.repository.save(
+    return await this.repository.save(
       { ...entity, ...this.withAuthPersist(req, dto) } as any
     );
-    return { data: updated };
   }
 
   async replaceOne(req: ParsedRequest, dto: T): Promise<ReplaceOneResponse<T>> {
@@ -128,11 +153,10 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
 
     const entity = await queryBuilder.getOne();
     if (!entity) {
-      throw new Error('Entity not found');
+      throw new NotFoundException('Entity not found');
     }
 
-    const replaced = await this.repository.save(this.withAuthPersist(req, dto) as any);
-    return { data: replaced };
+    return await this.repository.save(this.withAuthPersist(req, dto) as any);
   }
 
   /**
@@ -146,17 +170,18 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     return { ...dto, ...persist };
   }
 
-  async deleteOne(req: ParsedRequest): Promise<DeleteOneResponse> {
+  async deleteOne(req: ParsedRequest): Promise<DeleteOneResponse<T>> {
     const queryBuilder = this.repository.createQueryBuilder('entity');
     this.applyWhere(queryBuilder, req);
 
     const entity = await queryBuilder.getOne();
     if (!entity) {
-      throw new Error('Entity not found');
+      throw new NotFoundException('Entity not found');
     }
 
     await this.repository.remove(entity);
-    return {};
+    // nestjsx returns void by default (returnDeleted is options work, #21)
+    return undefined;
   }
 
   async recoverOne(req: ParsedRequest): Promise<RecoverOneResponse<T>> {
@@ -400,9 +425,18 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   }
 
   /**
-   * Apply pagination to query builder
+   * Apply pagination to query builder.
+   *
+   * With joins present, limit/offset paginate JOINED ROWS (a one-to-many
+   * join multiplies rows), so pages come back short or misaligned. TypeORM's
+   * take/skip paginate distinct root entities in that case — nestjsx does
+   * the same. Without joins, limit/offset is the cheaper equivalent.
    */
-  protected applyPagination(queryBuilder: SelectQueryBuilder<T>, req: ParsedRequest): void {
+  protected applyPagination(
+    queryBuilder: SelectQueryBuilder<T>,
+    req: ParsedRequest,
+    hasJoins = false
+  ): void {
     const { limit, offset, page } = req.parsed;
     const maxLimit = this.options.query?.maxLimit || 100;
 
@@ -410,8 +444,13 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     const actualLimit = Math.min(limit || this.options.query?.limit || 20, maxLimit);
     const actualOffset = offset || ((page || 1) - 1) * actualLimit;
 
-    queryBuilder.limit(actualLimit);
-    queryBuilder.offset(actualOffset);
+    if (hasJoins) {
+      queryBuilder.take(actualLimit);
+      queryBuilder.skip(actualOffset);
+    } else {
+      queryBuilder.limit(actualLimit);
+      queryBuilder.offset(actualOffset);
+    }
   }
 
   /**

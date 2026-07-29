@@ -37,6 +37,10 @@ const mockQueryBuilder = {
   addOrderBy: jest.fn().mockReturnThis(),
   limit: jest.fn().mockReturnThis(),
   offset: jest.fn().mockReturnThis(),
+  take: jest.fn().mockReturnThis(),
+  skip: jest.fn().mockReturnThis(),
+  innerJoin: jest.fn().mockReturnThis(),
+  innerJoinAndSelect: jest.fn().mockReturnThis(),
   getMany: jest.fn(),
   getManyAndCount: jest.fn(),
   getOne: jest.fn()
@@ -307,7 +311,7 @@ describe('TypeOrmCrudService', () => {
 
       const result = await service.getOne(parsedRequest);
 
-      expect(result).toEqual({ data: mockEntity });
+      expect(result).toEqual(mockEntity); // bare entity, nestjsx shape
       expect(mockQueryBuilder.getOne).toHaveBeenCalled();
     });
 
@@ -364,7 +368,7 @@ describe('TypeOrmCrudService', () => {
 
       const result = await service.createOne(parsedRequest, dto);
 
-      expect(result).toEqual({ data: mockEntity });
+      expect(result).toEqual(mockEntity); // bare entity, nestjsx shape
       expect(mockRepository.create).toHaveBeenCalledWith(dto);
       expect(mockRepository.save).toHaveBeenCalledWith(mockEntity);
     });
