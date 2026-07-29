@@ -143,9 +143,11 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
       throw new NotFoundException(`${this.entityName()} not found`);
     }
 
-    return await this.repository.save(
-      { ...entity, ...this.withAuthPersist(req, dto) } as any
-    );
+    // nestjsx strips primary keys from the update body: a client echoing a
+    // fetched entity back through PATCH (or sending {id: 999}) must never
+    // rewrite the row's identity. The target row is always the fetched one.
+    const body = this.stripPrimaryKeys(this.withAuthPersist(req, dto));
+    return await this.repository.save({ ...entity, ...body } as any);
   }
 
   async replaceOne(req: ParsedRequest, dto: T): Promise<ReplaceOneResponse<T>> {
@@ -157,7 +159,11 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
       throw new NotFoundException(`${this.entityName()} not found`);
     }
 
-    return await this.repository.save(this.withAuthPersist(req, dto) as any);
+    // PUT keeps the target row's identity (from the route), never the body's.
+    const body = this.stripPrimaryKeys(this.withAuthPersist(req, dto));
+    return await this.repository.save(
+      { ...body, ...this.primaryKeyValues(entity) } as any
+    );
   }
 
   /**
@@ -169,6 +175,25 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     const persist = req.parsed.authPersist;
     if (!persist || typeof persist !== 'object') return dto;
     return { ...dto, ...persist };
+  }
+
+  /** Remove primary-key fields from a mutation body (nestjsx behavior). */
+  protected stripPrimaryKeys<D>(dto: D): D {
+    if (!dto || typeof dto !== 'object') return dto;
+    const out: any = { ...(dto as any) };
+    for (const pk of this.rootPrimaryKeys()) {
+      delete out[pk];
+    }
+    return out;
+  }
+
+  /** The fetched entity's primary-key field/value map. */
+  protected primaryKeyValues(entity: T): Record<string, any> {
+    const out: Record<string, any> = {};
+    for (const pk of this.rootPrimaryKeys()) {
+      out[pk] = (entity as any)[pk];
+    }
+    return out;
   }
 
   async deleteOne(req: ParsedRequest): Promise<DeleteOneResponse<T>> {
