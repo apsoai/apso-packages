@@ -37,6 +37,9 @@ export {
   // Request/Response types (ParsedRequest the TYPE is CrudRequest above;
   // also available as ParsedRequestType)
   ParsedRequest as ParsedRequestType,
+  ParsedRequestParams,
+  QueryOptions,
+  SCondition,
   CrudRequestQuery,
   CrudRequestOptions,
   CrudAuthOptions,

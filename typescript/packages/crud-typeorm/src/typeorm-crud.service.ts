@@ -23,7 +23,9 @@ import {
   CrudServiceOptions,
   FilterCondition,
   SortCondition,
-  JoinCondition
+  JoinCondition,
+  ParsedRequestParams,
+  QueryOptions
 } from '@apso/crud-core';
 
 @Injectable()
@@ -283,8 +285,8 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
    * does anyway).
    */
   protected getSelect(
-    parsed: ParsedRequest['parsed'],
-    _options: CrudServiceOptions['query']
+    parsed: ParsedRequestParams,
+    _options?: QueryOptions
   ): string[] {
     // nestjsx silently drops unknown field names (clients build field lists
     // dynamically; a stale name must not 500 the endpoint — #42).

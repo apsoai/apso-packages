@@ -8,3 +8,15 @@
  */
 
 export * from './request-parser';
+
+// Type-only re-exports so consumers importing these from
+// @nestjsx/crud-request keep working after the import swap (client-safe:
+// types only, sourced from the agnostic core).
+export type {
+  ParsedRequestParams,
+  SCondition,
+  ParsedRequest,
+  SearchCondition,
+  FilterCondition,
+  CrudRequestOptions,
+} from '@apso/crud-core';
