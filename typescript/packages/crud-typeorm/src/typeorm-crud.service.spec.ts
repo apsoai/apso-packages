@@ -247,8 +247,11 @@ describe('TypeOrmCrudService', () => {
 
       await service.getMany(parsedRequest);
 
+      // No select list: join-and-select everything
       expect(mockQueryBuilder.leftJoinAndSelect).toHaveBeenCalledWith('entity.facilities', 'facilities');
-      expect(mockQueryBuilder.leftJoinAndSelect).toHaveBeenCalledWith('entity.customer', 'cust');
+      // Explicit select list: plain join + selected columns incl. the PK
+      expect(mockQueryBuilder.leftJoin).toHaveBeenCalledWith('entity.customer', 'cust');
+      expect(mockQueryBuilder.addSelect).toHaveBeenCalledWith(['cust.id', 'cust.name']);
     });
 
     it('should enforce max limit', async () => {

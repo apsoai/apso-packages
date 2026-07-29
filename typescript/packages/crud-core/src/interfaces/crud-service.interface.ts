@@ -82,6 +82,17 @@ export interface CrudServiceOptions {
     limit?: number;
     maxLimit?: number;
     cache?: number;
+    /**
+     * Join allowlist keyed by join path (nestjsx-compatible). A requested
+     * join not present here is skipped; entries may set eager, required,
+     * alias, and allow (selectable columns).
+     */
+    join?: Record<string, {
+      eager?: boolean;
+      required?: boolean;
+      alias?: string;
+      allow?: string[];
+    }>;
   };
 
   /**

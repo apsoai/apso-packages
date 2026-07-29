@@ -55,11 +55,11 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   async getMany(req: ParsedRequest): Promise<GetManyResponse<T>> {
     const queryBuilder = this.repository.createQueryBuilder('entity');
 
-    // Apply all query modifications
+    // Joins first: WHERE and ORDER BY may reference join aliases
+    const aliases = this.applyJoins(queryBuilder, req);
     this.applySelect(queryBuilder, req);
-    this.applyWhere(queryBuilder, req);
-    this.applyJoins(queryBuilder, req);
-    this.applySort(queryBuilder, req);
+    this.applyWhere(queryBuilder, req, aliases);
+    this.applySort(queryBuilder, req, aliases);
     this.applyPagination(queryBuilder, req);
 
     // Execute queries
@@ -81,9 +81,9 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   async getOne(req: ParsedRequest): Promise<GetOneResponse<T>> {
     const queryBuilder = this.repository.createQueryBuilder('entity');
 
+    const aliases = this.applyJoins(queryBuilder, req);
     this.applySelect(queryBuilder, req);
-    this.applyWhere(queryBuilder, req);
-    this.applyJoins(queryBuilder, req);
+    this.applyWhere(queryBuilder, req, aliases);
 
     const entity = await queryBuilder.getOne();
 
@@ -190,18 +190,22 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
    * Fallback: a hand-constructed ParsedRequest with an empty search still
    * gets paramsFilter applied, so getOne/update/delete always target by id.
    */
-  protected applyWhere(queryBuilder: SelectQueryBuilder<T>, req: ParsedRequest): void {
+  protected applyWhere(
+    queryBuilder: SelectQueryBuilder<T>,
+    req: ParsedRequest,
+    aliases?: Map<string, string>
+  ): void {
     const { search, paramsFilter } = req.parsed;
     const counter = { n: 0 };
 
     if (search && Object.keys(search).length > 0) {
-      queryBuilder.andWhere(new Brackets(qb => this.buildSearch(qb, search, '$and', counter)));
+      queryBuilder.andWhere(new Brackets(qb => this.buildSearch(qb, search, '$and', counter, aliases)));
       return;
     }
 
     if (paramsFilter && paramsFilter.length > 0) {
       paramsFilter.forEach(condition => {
-        const { clause, params } = this.buildCondition(condition.field, condition.operator, condition.value, counter);
+        const { clause, params } = this.buildCondition(condition.field, condition.operator, condition.value, counter, aliases);
         queryBuilder.andWhere(clause, params);
       });
     }
@@ -217,7 +221,8 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     qb: WhereExpressionBuilder,
     node: any,
     mode: '$and' | '$or',
-    counter: { n: number }
+    counter: { n: number },
+    aliases?: Map<string, string>
   ): void {
     const attach = (fragment: (inner: WhereExpressionBuilder) => void) => {
       const bracket = new Brackets(inner => fragment(inner));
@@ -232,20 +237,20 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     for (const [key, value] of Object.entries(node)) {
       if (key === '$and') {
         if (!Array.isArray(value)) throw new BadRequestException('$and expects an array');
-        attach(inner => value.forEach((child: any) => this.buildSearch(inner, child, '$and', counter)));
+        attach(inner => value.forEach((child: any) => this.buildSearch(inner, child, '$and', counter, aliases)));
       } else if (key === '$or') {
         if (!Array.isArray(value)) throw new BadRequestException('$or expects an array');
-        attach(inner => value.forEach((child: any) => this.buildSearch(inner, child, '$or', counter)));
+        attach(inner => value.forEach((child: any) => this.buildSearch(inner, child, '$or', counter, aliases)));
       } else {
         // field condition: primitive => $eq, object => one clause per operator
         attach(inner => {
           if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
             for (const [op, opValue] of Object.entries(value as Record<string, any>)) {
-              const { clause, params } = this.buildCondition(key, op, opValue, counter);
+              const { clause, params } = this.buildCondition(key, op, opValue, counter, aliases);
               inner.andWhere(clause, params);
             }
           } else {
-            const { clause, params } = this.buildCondition(key, '$eq', value, counter);
+            const { clause, params } = this.buildCondition(key, '$eq', value, counter, aliases);
             inner.andWhere(clause, params);
           }
         });
@@ -254,50 +259,135 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   }
 
   /**
-   * Apply JOIN operations to query builder
+   * Apply JOIN operations, nestjsx-compatible:
+   * - A requested join is honored only when options.query.join is undefined
+   *   (no restriction configured) or contains the join path. Unlisted joins
+   *   are silently skipped, like nestjsx — the allowlist is the access
+   *   boundary the tenant-scope layer depends on.
+   * - options.query.join entries with eager:true are always applied, even
+   *   when not requested.
+   * - Nested paths (a.b.c) chain through parent aliases; a nested join whose
+   *   parent is not joined is skipped (nestjsx behavior).
+   * - join.select always includes the joined entity's primary key.
+   * - options.query.join[path].required => INNER JOIN.
+   *
+   * Returns the alias registry (join path -> SQL alias) used by WHERE and
+   * ORDER BY to resolve dotted fields.
    */
-  protected applyJoins(queryBuilder: SelectQueryBuilder<T>, req: ParsedRequest): void {
-    const joins = req.parsed.join;
+  protected applyJoins(queryBuilder: SelectQueryBuilder<T>, req: ParsedRequest): Map<string, string> {
+    const aliases = new Map<string, string>();
+    const allowed: Record<string, any> | undefined = this.options.query?.join;
 
-    if (joins && joins.length > 0) {
-      joins.forEach((join) => {
-        const relation = `entity.${join.field}`;
-        const alias = join.alias || join.field;
-
-        if (join.select && join.select.length > 0) {
-          const selectFields = join.select.map(field => `${alias}.${field}`);
-          queryBuilder.leftJoinAndSelect(relation, alias);
-          queryBuilder.addSelect(selectFields);
-        } else {
-          queryBuilder.leftJoinAndSelect(relation, alias);
+    // Requested joins, plus eager joins from options
+    const requested = new Map<string, JoinCondition>();
+    (req.parsed.join || []).forEach(j => requested.set(j.field, j));
+    if (allowed) {
+      for (const [path, cfg] of Object.entries(allowed)) {
+        if (cfg && (cfg as any).eager && !requested.has(path)) {
+          requested.set(path, { field: path });
         }
+      }
+    }
 
-        // Apply join conditions
-        if (join.on && join.on.length > 0) {
-          const counter = { n: 1000 }; // distinct param space from applyWhere
-          join.on.forEach(condition => {
-            const { clause, params } = this.buildCondition(
-              `${alias}.${condition.field.replace(`${alias}.`, '')}`,
-              condition.operator,
-              condition.value,
-              counter
-            );
-            queryBuilder.andWhere(clause, params);
-          });
-        }
-      });
+    // Shallow paths before deep so parents exist for children
+    const ordered = [...requested.values()].sort(
+      (a, b) => a.field.split('.').length - b.field.split('.').length
+    );
+
+    const usedAliases = new Set<string>(['entity']);
+
+    for (const join of ordered) {
+      const path = join.field;
+      const cfg = allowed ? allowed[path] : undefined;
+      if (allowed && !cfg) continue; // not in allowlist: skip, like nestjsx
+
+      const segments = path.split('.');
+      const relationName = segments[segments.length - 1];
+      const parentPath = segments.slice(0, -1).join('.');
+      const parentAlias = parentPath ? aliases.get(parentPath) : 'entity';
+      if (!parentAlias) continue; // parent not joined: skip, like nestjsx
+
+      // Alias: options alias, else last segment, de-collided with full path
+      let alias = (cfg && (cfg as any).alias) || join.alias || relationName;
+      if (usedAliases.has(alias)) {
+        alias = segments.join('_');
+      }
+      usedAliases.add(alias);
+      aliases.set(path, alias);
+
+      const relation = `${parentAlias}.${relationName}`;
+      const required = Boolean(cfg && (cfg as any).required);
+
+      // Effective select: requested ∩ allowed (when configured), + PK
+      const allowedSelect: string[] | undefined = cfg && (cfg as any).allow;
+      let select = join.select && join.select.length > 0 ? join.select : undefined;
+      if (select && allowedSelect && allowedSelect.length > 0) {
+        select = select.filter(f => allowedSelect.includes(f));
+      } else if (!select && allowedSelect && allowedSelect.length > 0) {
+        select = [...allowedSelect];
+      }
+
+      if (select && select.length > 0) {
+        // Explicit column selection: plain join + selected columns (+ PK)
+        if (required) queryBuilder.innerJoin(relation, alias);
+        else queryBuilder.leftJoin(relation, alias);
+
+        const pks = this.primaryKeysOf(path);
+        const cols = [...new Set([...pks, ...select])].map(f => `${alias}.${f}`);
+        queryBuilder.addSelect(cols);
+      } else {
+        if (required) queryBuilder.innerJoinAndSelect(relation, alias);
+        else queryBuilder.leftJoinAndSelect(relation, alias);
+      }
+
+      // Join ON extra conditions (ANDed into WHERE, matching prior behavior)
+      if (join.on && join.on.length > 0) {
+        const counter = { n: 1000 + aliases.size * 100 };
+        join.on.forEach(condition => {
+          const col = condition.field.includes('.')
+            ? condition.field
+            : `${alias}.${condition.field}`;
+          const { clause, params } = this.buildCondition(col, condition.operator, condition.value, counter);
+          queryBuilder.andWhere(clause, params);
+        });
+      }
+    }
+
+    return aliases;
+  }
+
+  /**
+   * Primary key property names of the entity at the end of a join path.
+   * Falls back to ['id'] when metadata is unavailable (e.g. unit tests
+   * with mock repositories).
+   */
+  protected primaryKeysOf(joinPath: string): string[] {
+    try {
+      let meta = this.repository.metadata;
+      for (const segment of joinPath.split('.')) {
+        const rel = meta.relations.find(r => r.propertyName === segment);
+        if (!rel) return ['id'];
+        meta = rel.inverseEntityMetadata;
+      }
+      return meta.primaryColumns.map(c => c.propertyName);
+    } catch {
+      return ['id'];
     }
   }
 
   /**
    * Apply sorting to query builder
    */
-  protected applySort(queryBuilder: SelectQueryBuilder<T>, req: ParsedRequest): void {
+  protected applySort(
+    queryBuilder: SelectQueryBuilder<T>,
+    req: ParsedRequest,
+    aliases?: Map<string, string>
+  ): void {
     const sort = req.parsed.sort;
 
     if (sort && sort.length > 0) {
       sort.forEach((sortCondition, index) => {
-        const field = `entity.${sortCondition.field}`;
+        const field = this.resolveField(sortCondition.field, aliases);
         const order = sortCondition.order;
 
         if (index === 0) {
@@ -325,15 +415,23 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   }
 
   /**
-   * Resolve a search field to a SQL identifier. Plain fields address the
-   * root alias; single-dot fields address a join alias when that join was
-   * applied (deeper nesting is join-parity work, #18).
+   * Resolve a search/sort field to a SQL identifier.
+   * - plain 'col' -> entity.col
+   * - 'a.b.col' where 'a.b' is a joined path -> '<aliasOf(a.b)>.col'
+   * - '<alias>.col' where alias was already resolved -> unchanged
    */
-  protected resolveField(field: string): string {
+  protected resolveField(field: string, aliases?: Map<string, string>): string {
     if (!field.includes('.')) {
       return `entity.${field}`;
     }
-    return field; // '<joinAlias>.<column>' — aliases are registered by applyJoins
+    const idx = field.lastIndexOf('.');
+    const prefix = field.slice(0, idx);
+    const col = field.slice(idx + 1);
+    if (aliases?.has(prefix)) {
+      return `${aliases.get(prefix)}.${col}`;
+    }
+    // Already alias-qualified (entity.x, or a registered alias value)
+    return field;
   }
 
   /**
@@ -345,9 +443,10 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     field: string,
     operator: string,
     value: any,
-    counter: { n: number }
+    counter: { n: number },
+    aliases?: Map<string, string>
   ): { clause: string; params: Record<string, any> } {
-    const col = this.resolveField(field);
+    const col = this.resolveField(field, aliases);
     const key = `p${counter.n++}`;
     const p = `:${key}`;
 
