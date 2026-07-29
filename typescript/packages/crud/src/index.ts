@@ -82,5 +82,16 @@ export {
   parseRequest,
 } from '@apso/crud-request';
 
+// Re-export the client-safe PostgREST parser (dual-dialect, #36).
+export {
+  PostgrestRequestParser,
+  createPostgrestParser,
+  parsePostgrest,
+} from '@apso/postgrest-request';
+
+// Dialect detection used by the interceptor (#51).
+export { detectDialect } from './dialect';
+export type { Dialect } from './dialect';
+
 // Re-export TypeORM integration
 export { TypeOrmCrudService } from '@apso/crud-typeorm';

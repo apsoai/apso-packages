@@ -27,6 +27,8 @@ import {
   RequestQueryException,
 } from '@apso/crud-core';
 import { CrudRequestParser } from '@apso/crud-request';
+import { PostgrestRequestParser } from '@apso/postgrest-request';
+import { detectDialect } from './dialect';
 
 @Injectable()
 export class CrudRequestInterceptor implements NestInterceptor {
@@ -37,9 +39,6 @@ export class CrudRequestInterceptor implements NestInterceptor {
 
     // Get CRUD options from method or class metadata
     const crudOptions = this.getCrudOptions(context);
-
-    // Create parser with options
-    const parser = new CrudRequestParser(crudOptions);
 
     // Evaluate CrudAuthOptions against the request. The resulting filter is
     // ANDed at the top of the search tree (or `or` is ORed against it), so
@@ -63,10 +62,27 @@ export class CrudRequestInterceptor implements NestInterceptor {
       }
     }
 
-    // Parse the request; map the parser's agnostic validation error to 400
+    // Select the dialect (header override or param-shape), build the matching
+    // parser, and parse. Both parsers share the same parse(query, params,
+    // auth) -> ParsedRequest contract, so the engine downstream is identical.
+    // An invalid header or an ambiguous mixed-dialect query throws
+    // RequestQueryException -> 400 (see detectDialect / docs/DIALECTS.md).
     try {
+      const dialect = detectDialect(request.query, request.headers?.['x-crud-dialect']);
+      const parser =
+        dialect === 'postgrest'
+          ? new PostgrestRequestParser(crudOptions)
+          : new CrudRequestParser(crudOptions);
+
       const parsedRequest = parser.parse(request.query, request.params, authContext);
       request[PARSED_CRUD_REQUEST_KEY] = parsedRequest;
+
+      // Echo the resolved dialect so clients and the conformance battery can
+      // confirm which parser ran (harmless if the response is already sent).
+      const res = context.switchToHttp().getResponse();
+      if (res && typeof res.setHeader === 'function' && !res.headersSent) {
+        res.setHeader('X-Crud-Dialect', dialect);
+      }
     } catch (e) {
       if (e instanceof RequestQueryException) {
         throw new BadRequestException(e.message);

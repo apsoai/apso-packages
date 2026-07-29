@@ -27,7 +27,8 @@
   "dependencies": {
     "@apso/crud-core": "^1.0.0",
     "@apso/crud-request": "^1.0.0",
-    "@apso/crud-typeorm": "^1.0.0"
+    "@apso/crud-typeorm": "^1.0.0",
+    "@apso/postgrest-request": "^1.0.0"
   },
   "peerDependencies": {
     "@nestjs/common": "^9.0.0 || ^10.0.0",
