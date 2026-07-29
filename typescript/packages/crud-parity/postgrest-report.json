@@ -1,0 +1,229 @@
+{
+  "generatedBy": "crud-parity postgrest battery (#36/#52)",
+  "dialectAvailable": true,
+  "total": 43,
+  "failed": 6,
+  "results": [
+    {
+      "id": "pg-eq",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-neq",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-gt",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-gte",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-lt",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-lte",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-like-star",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-ilike-star",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-in",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-is-null",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-is-true",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-is-false",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-not-eq",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-not-is-null",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-or",
+      "mode": "conformance",
+      "ok": false,
+      "detail": "status 400 != 200; body is not a bare JSON array (PostgREST returns arrays, no envelope); ids [] != [1,3]"
+    },
+    {
+      "id": "pg-implicit-and",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-select-subset",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-select-rename",
+      "mode": "conformance",
+      "ok": false,
+      "detail": "row keys [\"id\",\"title\"] != [\"id\",\"name\"]"
+    },
+    {
+      "id": "pg-order-desc",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-order-nullslast",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-limit-offset",
+      "mode": "conformance",
+      "ok": false,
+      "detail": "body is not a bare JSON array (PostgREST returns arrays, no envelope)"
+    },
+    {
+      "id": "pg-embed-m1",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-embed-1m",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-embed-mm",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-embed-nested",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-embed-filter-keeps-parents",
+      "mode": "conformance",
+      "ok": false,
+      "detail": "ids [1,2,3,5] != [1,2,3,4,5,6]; p4 should keep empty embed array"
+    },
+    {
+      "id": "pg-embed-inner",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
+      "id": "pg-unknown-filter-column",
+      "mode": "conformance",
+      "ok": false,
+      "detail": "status 500 != 400"
+    },
+    {
+      "id": "eqv-eq",
+      "mode": "equivalence",
+      "ok": true
+    },
+    {
+      "id": "eqv-in",
+      "mode": "equivalence",
+      "ok": true
+    },
+    {
+      "id": "eqv-ilike-contL",
+      "mode": "equivalence",
+      "ok": true
+    },
+    {
+      "id": "eqv-isnull",
+      "mode": "equivalence",
+      "ok": true
+    },
+    {
+      "id": "eqv-or",
+      "mode": "equivalence",
+      "ok": false,
+      "detail": "pg 400 ids=[] vs nx 200 ids=[1,3]"
+    },
+    {
+      "id": "eqv-sort",
+      "mode": "equivalence",
+      "ok": true
+    },
+    {
+      "id": "eqv-limit-offset",
+      "mode": "equivalence",
+      "ok": true
+    },
+    {
+      "id": "eqv-select-fields",
+      "mode": "equivalence",
+      "ok": true
+    },
+    {
+      "id": "eqv-embed-join",
+      "mode": "equivalence",
+      "ok": true
+    },
+    {
+      "id": "eqv-nested",
+      "mode": "equivalence",
+      "ok": true
+    },
+    {
+      "id": "acc-guard-denied",
+      "mode": "access",
+      "ok": true
+    },
+    {
+      "id": "acc-guard-allowed-embed",
+      "mode": "access",
+      "ok": true
+    },
+    {
+      "id": "acc-scope-rows",
+      "mode": "access",
+      "ok": true
+    },
+    {
+      "id": "acc-scope-cannot-widen",
+      "mode": "access",
+      "ok": true
+    },
+    {
+      "id": "acc-non-allowlisted-embed",
+      "mode": "access",
+      "ok": true
+    }
+  ]
+}

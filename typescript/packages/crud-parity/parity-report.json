@@ -1,0 +1,86 @@
+{
+  "generatedBy": "crud-parity (apsoai/apso-packages#16, sub-issue of #14)",
+  "reference": "@nestjsx/crud@4.5.0",
+  "candidate": "@apso/crud@local",
+  "total": 123,
+  "mismatched": 0,
+  "byCategory": {
+    "baseline": {
+      "total": 2,
+      "failed": 0
+    },
+    "fields": {
+      "total": 3,
+      "failed": 0
+    },
+    "filter": {
+      "total": 18,
+      "failed": 0
+    },
+    "filter-L": {
+      "total": 8,
+      "failed": 0
+    },
+    "or": {
+      "total": 3,
+      "failed": 0
+    },
+    "search": {
+      "total": 8,
+      "failed": 0
+    },
+    "join": {
+      "total": 9,
+      "failed": 0
+    },
+    "join-nested": {
+      "total": 5,
+      "failed": 0
+    },
+    "sort": {
+      "total": 3,
+      "failed": 0
+    },
+    "pagination": {
+      "total": 5,
+      "failed": 0
+    },
+    "getone": {
+      "total": 4,
+      "failed": 0
+    },
+    "join-eager": {
+      "total": 5,
+      "failed": 0
+    },
+    "auth": {
+      "total": 5,
+      "failed": 0
+    },
+    "op-type": {
+      "total": 13,
+      "failed": 0
+    },
+    "bare-op": {
+      "total": 5,
+      "failed": 0
+    },
+    "join-deep": {
+      "total": 5,
+      "failed": 0
+    },
+    "join-select": {
+      "total": 4,
+      "failed": 0
+    },
+    "errors": {
+      "total": 11,
+      "failed": 0
+    },
+    "auth-scope": {
+      "total": 7,
+      "failed": 0
+    }
+  },
+  "mismatches": []
+}

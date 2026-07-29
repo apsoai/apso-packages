@@ -4,7 +4,13 @@
   "private": true,
   "description": "Apso first-party TypeScript libraries (npm workspace root).",
   "workspaces": [
-    "packages/*"
+    "packages/crud",
+    "packages/crud-core",
+    "packages/crud-request",
+    "packages/crud-typeorm",
+    "packages/domain-events",
+    "packages/postgrest-request",
+    "packages/sdk"
   ],
   "scripts": {
     "build": "npm run build -w @apso/crud-core -w @apso/crud-request -w @apso/postgrest-request -w @apso/crud-typeorm -w @apso/crud -w @apso/sdk -w @apso/domain-events --if-present",

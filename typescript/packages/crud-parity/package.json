@@ -1,0 +1,40 @@
+{
+  "name": "@apso/crud-parity",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Differential parity test suite: @apso/crud vs @nestjsx/crud 4.5.0 (joins, filters, sort, pagination). Never published. See apsoai/apso-packages#16.",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "NODE_OPTIONS='--experimental-vm-modules' jest --runInBand"
+  },
+  "apsoCrudNote": "@apso/crud* are consumed as SOURCE via jest moduleNameMapper + tsconfig paths (see jest.config.js) pointing at the loose local packages, so their nested node_modules cannot introduce duplicate typeorm/@nestjs instances. Switch to workspace deps when the packages move into this repo (#14 step 1).",
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.2",
+    "@nestjs/common": "^9.3.7",
+    "@nestjs/core": "^9.3.7",
+    "@nestjs/platform-express": "^9.4.3",
+    "@nestjs/swagger": "^6.2.1",
+    "@nestjs/typeorm": "^9.0.1",
+    "@nestjsx/crud": "4.5.0",
+    "@nestjsx/crud-request": "4.5.0",
+    "@nestjsx/crud-typeorm": "4.5.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "typeorm": "^0.3.28",
+    "typeorm-pglite": "^0.3.2"
+  },
+  "devDependencies": {
+    "@nestjs/testing": "^9.3.7",
+    "@types/express": "^4.17.21",
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.12.7",
+    "@types/supertest": "^6.0.2",
+    "jest": "^29.7.0",
+    "supertest": "^7.0.0",
+    "ts-jest": "^29.1.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}
