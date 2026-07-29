@@ -43,6 +43,39 @@ interface Step {
   headers?: Record<string, string>;
 }
 
+/**
+ * EXPECTED DIVERGENCES (#44, Matt's decision 2026-07-29, @apso/crud 1.0.1):
+ * on create/replace, nestjsx re-hydrates echoed timestamp values through the
+ * server's local timezone (a posted UTC instant comes back shifted); @apso
+ * echoes the correct UTC instant as posted. Storage and reads are identical
+ * (probe-verified). For these steps the comparison IGNORES createdAt equality
+ * between the apps and instead asserts the divergence is EXACTLY the
+ * documented one: the candidate echoes the posted value verbatim.
+ */
+const EXPECTED_TZ_DIVERGENCE: Record<string, string> = {
+  'create-one': '2026-07-04T00:00:00.000Z',
+  'create-one-null-body-field': '2026-07-05T00:00:00.000Z',
+  'create-many-bulk': 'BULK',
+  'replace-put': '2026-07-08T00:00:00.000Z',
+  'auth-create-allowed': '2026-07-09T00:00:00.000Z',
+  'create-extra-unknown-field': '2026-07-01T00:00:00.000Z',
+  'scoped-create-persist-overrides-body': '2026-07-02T00:00:00.000Z',
+  'scoped-bulk-persist': 'BULK',
+};
+
+/** Strip createdAt everywhere (rows or arrays) for divergence-tolerant compare. */
+const stripCreatedAt = (v: unknown): unknown => {
+  if (Array.isArray(v)) return v.map(stripCreatedAt);
+  if (v && typeof v === 'object') {
+    const o: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      if (k !== 'createdAt') o[k] = stripCreatedAt(val);
+    }
+    return o;
+  }
+  return v;
+};
+
 /** Applied in order; both apps see the exact same sequence. */
 const STEPS: Step[] = [
   {
@@ -192,6 +225,24 @@ describe('mutation-route parity', () => {
       [s.method](s.path)
       .set(s.headers ?? {})
       .send(s.body as any);
+
+    const divergence = EXPECTED_TZ_DIVERGENCE[s.id];
+    if (divergence) {
+      // Everything except createdAt must still match exactly.
+      expect({ status: candRes.status, body: sortKeys(stripCreatedAt(candRes.body)) }).toEqual({
+        status: refRes.status,
+        body: sortKeys(stripCreatedAt(refRes.body)),
+      });
+      // And the divergence must be EXACTLY the documented one: candidate
+      // echoes the posted UTC instant verbatim.
+      if (divergence !== 'BULK') {
+        expect((candRes.body as any).createdAt).toBe(divergence);
+      } else {
+        const posted = ((s.body as any).bulk as any[]).map((b) => b.createdAt);
+        expect(((candRes.body as any) as any[]).map((r) => r.createdAt)).toEqual(posted);
+      }
+      return;
+    }
 
     expect({ status: candRes.status, body: sortKeys(candRes.body) }).toEqual({
       status: refRes.status,

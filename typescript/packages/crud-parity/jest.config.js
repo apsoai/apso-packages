@@ -35,6 +35,7 @@ module.exports = {
     '^@apso/crud-core$': `${PKGS}/crud-core/src/index.ts`,
     '^@apso/crud-request$': `${PKGS}/crud-request/src/index.ts`,
     '^@apso/crud-typeorm$': `${PKGS}/crud-typeorm/src/index.ts`,
+    '^@apso/postgrest-request$': `${PKGS}/postgrest-request/src/index.ts`,
     '^typeorm$': nm('typeorm'),
     '^@nestjsx/crud$': nm('@nestjsx/crud'),
     '^@nestjsx/crud-request$': nm('@nestjsx/crud-request'),

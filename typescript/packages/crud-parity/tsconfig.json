@@ -47,6 +47,9 @@
       "rxjs": [
         "node_modules/rxjs",
         "../../node_modules/rxjs"
+      ],
+      "@apso/postgrest-request": [
+        "../postgrest-request/src/index.ts"
       ]
     }
   },
