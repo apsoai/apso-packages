@@ -4,7 +4,7 @@
 import { Controller, Injectable, Module, UseGuards } from '@nestjs/common';
 import { InjectRepository, TypeOrmModule } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
-import { Crud } from '@nestjsx/crud';
+import { Crud, CrudAuth } from '@nestjsx/crud';
 import { TypeOrmCrudService } from '@nestjsx/crud-typeorm';
 import { ALL_ENTITIES, Author, Comment, Post, Review } from './entities';
 import {
@@ -12,6 +12,7 @@ import {
   COMMENT_CRUD_QUERY,
   POST_CRUD_QUERY,
   REVIEW_CRUD_QUERY,
+  SCOPED_AUTH,
   SECURE_ROUTES,
 } from './crud-config';
 import { HeaderGuard } from './auth';
@@ -91,6 +92,16 @@ export class NxSecurePostController {
   constructor(public service: NxPostService) {}
 }
 
+@Crud({
+  model: { type: Post },
+  query: POST_CRUD_QUERY,
+})
+@CrudAuth(SCOPED_AUTH)
+@Controller('scoped-posts')
+export class NxScopedPostController {
+  constructor(public service: NxPostService) {}
+}
+
 export function buildNestjsxModule(dataSourceFactory: () => Promise<DataSource>) {
   @Module({
     imports: [
@@ -106,6 +117,7 @@ export function buildNestjsxModule(dataSourceFactory: () => Promise<DataSource>)
       NxAuthorController,
       NxReviewController,
       NxSecurePostController,
+      NxScopedPostController,
     ],
     providers: [NxPostService, NxCommentService, NxAuthorService, NxReviewService, HeaderGuard],
   })

@@ -12,8 +12,8 @@
 const path = require('path');
 const fs = require('fs');
 
-// packages/crud-parity -> ../../../../ = the loose apso/packages dir
-const LOOSE = path.resolve(__dirname, '../../../..');
+// Monorepo crud packages (reconciled by #14 step 1 on the #24 branch)
+const PKGS = path.resolve(__dirname, '..');
 
 // Nest 9 (matching platform/server) conflicts with the workspace's Nest 10
 // (domain-events), so npm nests this package's copies locally. Resolve each
@@ -31,10 +31,10 @@ module.exports = {
   testTimeout: 180000,
   transform: { '^.+\\.ts$': ['ts-jest', { tsconfig: '<rootDir>/tsconfig.json' }] },
   moduleNameMapper: {
-    '^@apso/crud$': `${LOOSE}/apso-crud/src/index.ts`,
-    '^@apso/crud-core$': `${LOOSE}/apso-crud-core/src/index.ts`,
-    '^@apso/crud-request$': `${LOOSE}/apso-crud-request/src/index.ts`,
-    '^@apso/crud-typeorm$': `${LOOSE}/apso-crud-typeorm/src/index.ts`,
+    '^@apso/crud$': `${PKGS}/crud/src/index.ts`,
+    '^@apso/crud-core$': `${PKGS}/crud-core/src/index.ts`,
+    '^@apso/crud-request$': `${PKGS}/crud-request/src/index.ts`,
+    '^@apso/crud-typeorm$': `${PKGS}/crud-typeorm/src/index.ts`,
     '^typeorm$': nm('typeorm'),
     '^@nestjsx/crud$': nm('@nestjsx/crud'),
     '^@nestjsx/crud-request$': nm('@nestjsx/crud-request'),

@@ -17,6 +17,7 @@ export const COMMENT_CRUD_QUERY = {
   join: {
     post: { eager: false },
     'post.author': { eager: false },
+    'post.author.profile': { eager: false },
   },
 };
 
@@ -25,6 +26,7 @@ export const AUTHOR_CRUD_QUERY = {
     posts: { eager: false },
     profile: { eager: false },
     'posts.categories': { eager: false },
+    'posts.comments': { eager: false },
   },
 };
 
@@ -43,4 +45,16 @@ export const REVIEW_CRUD_QUERY = {
 /** Route surface restriction parity for the secure controller. */
 export const SECURE_ROUTES = {
   exclude: ['deleteOneBase', 'createManyBase'] as any,
+};
+
+
+/**
+ * Auth scoping parity (mirrors platform/server tenant isolation): reads are
+ * hard-scoped to authorId=1 and creates persist authorId=1 regardless of the
+ * posted body. Filters/or must NOT be able to widen the scope.
+ * Shape is nestjsx AuthOptions; both libraries receive the identical object.
+ */
+export const SCOPED_AUTH = {
+  filter: () => ({ authorId: 1 }),
+  persist: () => ({ authorId: 1 }),
 };

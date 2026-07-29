@@ -36,12 +36,12 @@ export async function seed(ds: DataSource, schema: string): Promise<void> {
   ]);
 
   await posts.insert([
-    { id: 1, title: 'Notes on the Engine', body: 'analytical engine notes', views: 100, published: true, authorId: 1 },
-    { id: 2, title: 'Bugs and Moths', body: null, views: 250, published: true, authorId: 2 },
-    { id: 3, title: 'On Computable Numbers', body: 'entscheidungsproblem', views: 999, published: true, authorId: 3 },
-    { id: 4, title: 'engine internals', body: 'lowercase title case test', views: 10, published: false, authorId: 1 },
-    { id: 5, title: 'Compilers 101', body: 'flow-matic history', views: 250, published: false, authorId: 2 },
-    { id: 6, title: 'Imitation Game', body: null, views: 0, published: true, authorId: 3 },
+    { id: 1, title: 'Notes on the Engine', body: 'analytical engine notes', views: 100, published: true, authorId: 1, createdAt: new Date('2026-01-01T10:00:00Z'), score: '10.50' },
+    { id: 2, title: 'Bugs and Moths', body: null, views: 250, published: true, authorId: 2, createdAt: new Date('2026-02-15T12:30:00Z'), score: '77.25' },
+    { id: 3, title: 'On Computable Numbers', body: 'entscheidungsproblem', views: 999, published: true, authorId: 3, createdAt: new Date('2026-03-20T08:15:00Z'), score: '99.99' },
+    { id: 4, title: 'engine internals', body: 'lowercase title case test', views: 10, published: false, authorId: 1, createdAt: new Date('2026-03-20T08:15:00Z'), score: '10.50' },
+    { id: 5, title: 'Compilers 101', body: 'flow-matic history', views: 250, published: false, authorId: 2, createdAt: new Date('2026-05-05T23:59:59Z'), score: '0.00' },
+    { id: 6, title: 'Imitation Game', body: null, views: 0, published: true, authorId: 3, createdAt: new Date('2026-06-30T00:00:01Z'), score: '55.10' },
   ]);
 
   // M:M links via the join table

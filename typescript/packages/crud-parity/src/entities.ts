@@ -76,6 +76,12 @@ export class Post {
   @Column({ default: false })
   published: boolean;
 
+  @Column({ type: 'timestamp' })
+  createdAt: Date;
+
+  @Column({ type: 'numeric', precision: 6, scale: 2 })
+  score: string;
+
   @ManyToOne(() => Author, (a) => a.posts)
   author: Relation<Author>;
 

@@ -49,13 +49,13 @@ const STEPS: Step[] = [
     id: 'create-one',
     method: 'post',
     path: '/posts',
-    body: { title: 'Parity Post', body: 'created by suite', views: 1, published: false, authorId: 1 },
+    body: { title: 'Parity Post', body: 'created by suite', views: 1, published: false, authorId: 1, createdAt: '2026-07-04T00:00:00.000Z', score: '4.00' },
   },
   {
     id: 'create-one-null-body-field',
     method: 'post',
     path: '/posts',
-    body: { title: 'Null body', body: null, views: 2, published: true, authorId: 2 },
+    body: { title: 'Null body', body: null, views: 2, published: true, authorId: 2, createdAt: '2026-07-05T00:00:00.000Z', score: '5.00' },
   },
   {
     id: 'create-many-bulk',
@@ -63,8 +63,8 @@ const STEPS: Step[] = [
     path: '/posts/bulk',
     body: {
       bulk: [
-        { title: 'Bulk A', views: 10, published: false, authorId: 3 },
-        { title: 'Bulk B', views: 20, published: true, authorId: 1 },
+        { title: 'Bulk A', views: 10, published: false, authorId: 3, createdAt: '2026-07-06T00:00:00.000Z', score: '6.00' },
+        { title: 'Bulk B', views: 20, published: true, authorId: 1, createdAt: '2026-07-07T00:00:00.000Z', score: '7.00' },
       ],
     },
   },
@@ -75,7 +75,7 @@ const STEPS: Step[] = [
     id: 'replace-put',
     method: 'put',
     path: '/posts/2',
-    body: { id: 2, title: 'Replaced Moths', body: 'replaced', views: 300, published: false, authorId: 2 },
+    body: { id: 2, title: 'Replaced Moths', body: 'replaced', views: 300, published: false, authorId: 2, createdAt: '2026-07-08T00:00:00.000Z', score: '8.00' },
   },
   { id: 'delete-one', method: 'delete', path: '/posts/6' },
   { id: 'delete-missing', method: 'delete', path: '/posts/404' },
@@ -92,7 +92,7 @@ const STEPS: Step[] = [
     id: 'excluded-bulk-route',
     method: 'post',
     path: '/secure-posts/bulk',
-    body: { bulk: [{ title: 'x', views: 0, published: false, authorId: 1 }] },
+    body: { bulk: [{ title: 'x', views: 0, published: false, authorId: 1, createdAt: '2026-07-10T00:00:00.000Z', score: '0.10' }] },
     headers: { 'x-test-auth': 'letmein' },
   },
   // Guarded mutations
@@ -106,7 +106,7 @@ const STEPS: Step[] = [
     id: 'auth-create-allowed',
     method: 'post',
     path: '/secure-posts',
-    body: { title: 'allowed', views: 7, published: false, authorId: 1 },
+    body: { title: 'allowed', views: 7, published: false, authorId: 1, createdAt: '2026-07-09T00:00:00.000Z', score: '9.00' },
     headers: { 'x-test-auth': 'letmein' },
   },
   {
@@ -115,6 +115,39 @@ const STEPS: Step[] = [
     path: '/secure-posts/3',
     body: { views: 1000 },
     headers: { 'x-test-auth': 'letmein' },
+  },
+  // --- corpus expansion (#22 handoff): writes depth ---
+  { id: 'bulk-empty-array', method: 'post', path: '/posts/bulk', body: { bulk: [] } },
+  {
+    id: 'create-extra-unknown-field',
+    method: 'post',
+    path: '/posts',
+    body: { title: 'Extra field', views: 3, published: false, authorId: 1, createdAt: '2026-07-01T00:00:00.000Z', score: '1.00', notAColumn: 'ignored?' },
+  },
+  {
+    id: 'patch-id-mismatch-in-body',
+    method: 'patch',
+    path: '/posts/1',
+    body: { id: 999, views: 123 },
+  },
+  // auth.persist: authorId must be forced to 1 regardless of posted body
+  {
+    id: 'scoped-create-persist-overrides-body',
+    method: 'post',
+    path: '/scoped-posts',
+    body: { title: 'Persisted scope', views: 9, published: false, authorId: 3, createdAt: '2026-07-02T00:00:00.000Z', score: '2.00' },
+  },
+  {
+    id: 'scoped-patch-out-of-scope',
+    method: 'patch',
+    path: '/scoped-posts/2',
+    body: { views: 55555 },
+  },
+  {
+    id: 'scoped-bulk-persist',
+    method: 'post',
+    path: '/scoped-posts/bulk',
+    body: { bulk: [{ title: 'Scoped bulk', views: 4, published: true, authorId: 2, createdAt: '2026-07-03T00:00:00.000Z', score: '3.00' }] },
   },
 ];
 

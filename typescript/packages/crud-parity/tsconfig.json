@@ -12,17 +12,46 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "@apso/crud": ["../../../../apso-crud/src/index.ts"],
-      "@apso/crud-core": ["../../../../apso-crud-core/src/index.ts"],
-      "@apso/crud-request": ["../../../../apso-crud-request/src/index.ts"],
-      "@apso/crud-typeorm": ["../../../../apso-crud-typeorm/src/index.ts"],
-      "typeorm": ["../../node_modules/typeorm"],
-      "@nestjs/common": ["../../node_modules/@nestjs/common"],
-      "@nestjs/core": ["../../node_modules/@nestjs/core"],
-      "@nestjs/typeorm": ["../../node_modules/@nestjs/typeorm"],
-      "@nestjs/swagger": ["../../node_modules/@nestjs/swagger"],
-      "rxjs": ["../../node_modules/rxjs"]
+      "@apso/crud": [
+        "../crud/src/index.ts"
+      ],
+      "@apso/crud-core": [
+        "../crud-core/src/index.ts"
+      ],
+      "@apso/crud-request": [
+        "../crud-request/src/index.ts"
+      ],
+      "@apso/crud-typeorm": [
+        "../crud-typeorm/src/index.ts"
+      ],
+      "typeorm": [
+        "node_modules/typeorm",
+        "../../node_modules/typeorm"
+      ],
+      "@nestjs/common": [
+        "node_modules/@nestjs/common",
+        "../../node_modules/@nestjs/common"
+      ],
+      "@nestjs/core": [
+        "node_modules/@nestjs/core",
+        "../../node_modules/@nestjs/core"
+      ],
+      "@nestjs/typeorm": [
+        "node_modules/@nestjs/typeorm",
+        "../../node_modules/@nestjs/typeorm"
+      ],
+      "@nestjs/swagger": [
+        "node_modules/@nestjs/swagger",
+        "../../node_modules/@nestjs/swagger"
+      ],
+      "rxjs": [
+        "node_modules/rxjs",
+        "../../node_modules/rxjs"
+      ]
     }
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts"
+  ]
 }
