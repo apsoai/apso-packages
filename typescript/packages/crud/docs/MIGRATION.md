@@ -10,9 +10,11 @@ the exact procedure used to migrate the Apso platform server (182 files,
 528 tests, zero behavior change), and is the recommended path for any
 `@nestjsx/crud@4.5.0` codebase, including the Acquisition.com service.
 
-> After migrating, `@apso/crud` also accepts the PostgREST query dialect
+> After migrating, `@apso/crud` can also accept the PostgREST query dialect
 > (`?select=`, `?col=op.value`, resource embedding) against the same
-> endpoints — no code change. See [DIALECTS.md](./DIALECTS.md).
+> endpoints with no code change. PostgREST conformance is still hardening
+> (see the open `postgrest dialect` issues); treat the nestjsx dialect as
+> the stable surface for now. See [DIALECTS.md](./DIALECTS.md).
 
 ## TL;DR
 
