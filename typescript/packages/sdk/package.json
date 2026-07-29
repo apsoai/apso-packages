@@ -38,11 +38,8 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@apidevtools/swagger-parser": "^10.0.0",
     "@apso/crud-request": "^1.0.0",
-    "axios": "^1.7.8",
-    "openapi-types": "^9.0.0",
-    "swagger-to-ts": "^1.4.6"
+    "axios": "^1.7.8"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
