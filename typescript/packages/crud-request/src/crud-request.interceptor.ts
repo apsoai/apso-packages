@@ -19,7 +19,8 @@ import {
   ParsedRequest,
   CrudRequestOptions,
   PARSED_CRUD_REQUEST_KEY,
-  CRUD_OPTIONS_METADATA
+  CRUD_OPTIONS_METADATA,
+  CRUD_AUTH_OPTIONS_METADATA
 } from '@apso/crud-core';
 import { CrudRequestParser } from './request-parser';
 
@@ -39,7 +40,11 @@ export class CrudRequestInterceptor implements NestInterceptor {
     // Evaluate CrudAuthOptions against the request. The resulting filter is
     // ANDed at the top of the search tree (or `or` is ORed against it), so
     // user-supplied query params can never widen an auth restriction.
-    const auth = crudOptions.auth;
+    // options.auth (set via @Crud options or metadata patching) wins;
+    // otherwise fall back to the @CrudAuth class decorator's metadata.
+    const auth =
+      crudOptions.auth ||
+      this.reflector.get(CRUD_AUTH_OPTIONS_METADATA, context.getClass());
     const authContext: { filter?: any; or?: any; persist?: any } = {};
     if (auth) {
       const subject = auth.property ? request[auth.property] : request;

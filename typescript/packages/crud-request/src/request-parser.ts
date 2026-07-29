@@ -5,6 +5,7 @@
  * into structured ParsedRequest objects for use by CRUD services.
  */
 
+import { BadRequestException } from '@nestjs/common';
 import {
   ParsedRequest,
   CrudRequestQuery,
@@ -17,6 +18,23 @@ import {
   DEFAULT_PAGE_SIZE,
   DEFAULT_MAX_LIMIT
 } from '@apso/crud-core';
+
+
+/** All operators, unprefixed and $-prefixed, in nestjsx's message order. */
+const OPERATOR_LIST =
+  'eq,ne,gt,lt,gte,lte,starts,ends,cont,excl,in,notin,isnull,notnull,between,' +
+  '$eq,$ne,$gt,$lt,$gte,$lte,$starts,$ends,$cont,$excl,$in,$notin,$isnull,$notnull,$between,' +
+  '$eqL,$neL,$startsL,$endsL,$contL,$exclL,$inL,$notinL';
+const VALID_OPERATORS = new Set(OPERATOR_LIST.split(','));
+
+/** Normalize an operator: accept unprefixed nestjsx forms, 400 on unknown. */
+function normalizeOperator(op: string): FilterOperator {
+  const trimmed = op.trim();
+  if (!VALID_OPERATORS.has(trimmed)) {
+    throw new BadRequestException(`Invalid comparison operator. ${OPERATOR_LIST} expected`);
+  }
+  return (trimmed.startsWith('$') ? trimmed : `$${trimmed}`) as FilterOperator;
+}
 
 export class CrudRequestParser {
   private options: CrudRequestOptions;
@@ -261,23 +279,29 @@ export class CrudRequestParser {
 
     if (parts.length === 2) {
       const [field, operator] = parts;
-      const op = operator.trim() as FilterOperator;
+      const op = normalizeOperator(operator);
       if (op !== '$isnull' && op !== '$notnull') {
-        return null;
+        throw new BadRequestException('Invalid filter value');
       }
       return { field: field.trim(), operator: op, value: undefined };
     }
 
     if (parts.length !== 3) {
-      return null;
+      // nestjsx: a filter without operator/value is invalid
+      throw new BadRequestException('Invalid filter value');
     }
 
     const [field, operator, value] = parts;
+    const op = normalizeOperator(operator);
+
+    if (value === '' && op !== '$isnull' && op !== '$notnull') {
+      throw new BadRequestException('Invalid filter value');
+    }
 
     return {
       field: field.trim(),
-      operator: operator.trim() as FilterOperator,
-      value: this.parseValue(value, operator.trim() as FilterOperator)
+      operator: op,
+      value: this.parseValue(value, op)
     };
   }
 
@@ -288,9 +312,8 @@ export class CrudRequestParser {
   private parseSearch(search: string): SearchCondition {
     try {
       return JSON.parse(search);
-    } catch (error) {
-      console.warn('Invalid search JSON:', search);
-      return {};
+    } catch {
+      throw new BadRequestException('Invalid search param. JSON expected');
     }
   }
 
@@ -306,9 +329,11 @@ export class CrudRequestParser {
       const parts = sortStr.split(',');
       if (parts.length >= 1) {
         const field = parts[0].trim();
-        const order = (parts[1]?.trim().toUpperCase() === 'DESC') ? 'DESC' : 'ASC';
-
-        result.push({ field, order });
+        const rawOrder = (parts[1] ?? 'ASC').trim();
+        if (rawOrder !== 'ASC' && rawOrder !== 'DESC') {
+          throw new BadRequestException('Invalid sort order. ASC,DESC expected');
+        }
+        result.push({ field, order: rawOrder });
       }
     });
 
@@ -356,11 +381,9 @@ export class CrudRequestParser {
       }
     }
 
-    // Parse ON conditions (more complex parsing would be needed for full support)
-    if (joinStr.includes('||on[')) {
-      // This is a simplified version - full implementation would parse the on conditions
-      console.warn('Complex join ON conditions not fully implemented yet');
-    }
+    // NOTE: nestjsx join query syntax is field + select columns only; join
+    // ON conditions are not part of the URL surface (PostgREST embeds come
+    // with the #36 dialect).
 
     return joinCondition;
   }

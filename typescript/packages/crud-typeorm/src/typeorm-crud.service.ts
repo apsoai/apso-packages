@@ -99,7 +99,8 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
    * asked for a page/offset/limit or the service forces pagination.
    */
   protected decidePagination(req: ParsedRequest): boolean {
-    if (this.options.query?.alwaysPaginate) return true;
+    const optQuery: any = req.options?.query ?? this.options.query;
+    if (optQuery?.alwaysPaginate) return true;
     // nestjsx: only page/offset trigger the envelope; a bare ?limit= does
     // not (it just caps the bare array).
     const q = req.query || {};
@@ -116,7 +117,7 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     const entity = await queryBuilder.getOne();
 
     if (!entity) {
-      throw new NotFoundException('Entity not found');
+      throw new NotFoundException(`${this.entityName()} not found`);
     }
 
     return entity;
@@ -139,7 +140,7 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
 
     const entity = await queryBuilder.getOne();
     if (!entity) {
-      throw new NotFoundException('Entity not found');
+      throw new NotFoundException(`${this.entityName()} not found`);
     }
 
     return await this.repository.save(
@@ -153,7 +154,7 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
 
     const entity = await queryBuilder.getOne();
     if (!entity) {
-      throw new NotFoundException('Entity not found');
+      throw new NotFoundException(`${this.entityName()} not found`);
     }
 
     return await this.repository.save(this.withAuthPersist(req, dto) as any);
@@ -176,7 +177,7 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
 
     const entity = await queryBuilder.getOne();
     if (!entity) {
-      throw new NotFoundException('Entity not found');
+      throw new NotFoundException(`${this.entityName()} not found`);
     }
 
     await this.repository.remove(entity);
@@ -202,6 +203,25 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     }
   }
 
+  /** Entity display name for error messages (nestjsx uses the class name). */
+  protected entityName(): string {
+    try {
+      return this.repository.metadata.name;
+    } catch {
+      const t = this.entity as any;
+      return (t && t.name) || 'Entity';
+    }
+  }
+
+  /** Primary key property names of the root entity ('id' fallback). */
+  protected rootPrimaryKeys(): string[] {
+    try {
+      return this.repository.metadata.primaryColumns.map(c => c.propertyName);
+    } catch {
+      return ['id'];
+    }
+  }
+
   /**
    * nestjsx-compatible protected override point: subclasses override
    * getSelect to adjust column selection (platform/server's autogen
@@ -212,8 +232,9 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     parsed: ParsedRequest['parsed'],
     _options: CrudServiceOptions['query']
   ): string[] {
-    // Remove duplicates to fix nestjsx issue #777
-    const uniqueFields = [...new Set(parsed.fields || [])];
+    // nestjsx always includes the primary key(s), PK first; dedup fixes
+    // nestjsx issue #777.
+    const uniqueFields = [...new Set([...this.rootPrimaryKeys(), ...(parsed.fields || [])])];
     return uniqueFields.map(field => `entity.${field}`);
   }
 
@@ -314,7 +335,10 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
    */
   protected applyJoins(queryBuilder: SelectQueryBuilder<T>, req: ParsedRequest): Map<string, string> {
     const aliases = new Map<string, string>();
-    const allowed: Record<string, any> | undefined = this.options.query?.join;
+    // Controller-level @Crud options travel on the request (nestjsx flow);
+    // service construction options are the fallback.
+    const allowed: Record<string, any> | undefined =
+      (req.options?.query as any)?.join ?? this.options.query?.join;
 
     // Requested joins, plus eager joins from options
     const requested = new Map<string, JoinCondition>();
@@ -337,7 +361,9 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     for (const join of ordered) {
       const path = join.field;
       const cfg = allowed ? allowed[path] : undefined;
-      if (allowed && !cfg) continue; // not in allowlist: skip, like nestjsx
+      // nestjsx only applies joins configured in options.query.join; with no
+      // allowlist at all, NO join is honored. Unknown paths are skipped.
+      if (!cfg) continue;
 
       const segments = path.split('.');
       const relationName = segments[segments.length - 1];
@@ -557,7 +583,10 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
           params: { [key]: value.map((v: any) => String(v).toLowerCase()) }
         };
       default:
-        throw new BadRequestException(`Unknown filter operator: ${operator}`);
+        // nestjsx runtime behavior: unknown operators inside a search tree
+        // fall through to equality on the value (query-string operators are
+        // validated with a 400 at PARSE time; s= trees are not).
+        return { clause: `${col} = ${p}`, params: { [key]: value } };
     }
   }
 }
