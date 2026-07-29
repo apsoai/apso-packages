@@ -1,0 +1,266 @@
+{
+  "generatedBy": "crud-parity postgrest battery (#36/#52)",
+  "dialectAvailable": false,
+  "total": 43,
+  "failed": 0,
+  "results": [
+    {
+      "id": "pg-eq",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-neq",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-gt",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-gte",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-lt",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-lte",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-like-star",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-ilike-star",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-in",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-is-null",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-is-true",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-is-false",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-not-eq",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-not-is-null",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-or",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-implicit-and",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-select-subset",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-select-rename",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-order-desc",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-order-nullslast",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-limit-offset",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-embed-m1",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-embed-1m",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-embed-mm",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-embed-nested",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-embed-filter-keeps-parents",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-embed-inner",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "pg-unknown-filter-column",
+      "mode": "conformance",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "eqv-eq",
+      "mode": "equivalence",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "eqv-in",
+      "mode": "equivalence",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "eqv-ilike-contL",
+      "mode": "equivalence",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "eqv-isnull",
+      "mode": "equivalence",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "eqv-or",
+      "mode": "equivalence",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "eqv-sort",
+      "mode": "equivalence",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "eqv-limit-offset",
+      "mode": "equivalence",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "eqv-select-fields",
+      "mode": "equivalence",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "eqv-embed-join",
+      "mode": "equivalence",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "eqv-nested",
+      "mode": "equivalence",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "acc-guard-denied",
+      "mode": "access",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "acc-guard-allowed-embed",
+      "mode": "access",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "acc-scope-rows",
+      "mode": "access",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "acc-scope-cannot-widen",
+      "mode": "access",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    },
+    {
+      "id": "acc-non-allowlisted-embed",
+      "mode": "access",
+      "ok": true,
+      "detail": "staged: dialect unavailable"
+    }
+  ]
+}
