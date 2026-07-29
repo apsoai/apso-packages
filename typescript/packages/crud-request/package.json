@@ -1,6 +1,6 @@
 {
   "name": "@apso/crud-request",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Request parsing and validation for Apso CRUD framework",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -27,7 +27,6 @@
     "@apso/crud-core": "^1.0.0"
   },
   "devDependencies": {
-    "@nestjs/testing": "^10.0.0",
     "@types/jest": "^29.4.0",
     "@types/node": "^18.13.0",
     "@typescript-eslint/eslint-plugin": "^5.51.0",

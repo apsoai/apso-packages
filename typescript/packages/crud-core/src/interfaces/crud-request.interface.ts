@@ -31,6 +31,8 @@ export interface SearchCondition {
 export interface SortCondition {
   field: string;
   order: 'ASC' | 'DESC';
+  /** PostgREST nulls placement; omitted = engine/DB default. */
+  nulls?: 'NULLS FIRST' | 'NULLS LAST';
 }
 
 export interface JoinCondition {
@@ -63,7 +65,9 @@ export type FilterOperator =
   | '$contL'     // contains (case insensitive)
   | '$exclL'     // excludes (case insensitive)
   | '$inL'       // in array (case insensitive)
-  | '$notinL';   // not in array (case insensitive)
+  | '$notinL'    // not in array (case insensitive)
+  | '$like'      // raw LIKE (caller supplies % wildcards; PostgREST like)
+  | '$ilike';    // raw case-insensitive LIKE (PostgREST ilike)
 
 /**
  * The `parsed` shape of a request. nestjsx/crud-request names this

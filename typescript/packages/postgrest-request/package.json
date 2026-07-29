@@ -1,0 +1,19 @@
+{
+  "name": "@apso/postgrest-request",
+  "version": "1.0.0",
+  "description": "Client-safe PostgREST URL query parser for @apso/crud (dual-dialect). Emits the same parsed-request representation as @apso/crud-request.",
+  "license": "Apache-2.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "test": "jest",
+    "lint": "tsc -p tsconfig.json --noEmit && bash ../../scripts/no-server-imports.sh postgrest-request"
+  },
+  "dependencies": {
+    "@apso/crud-core": "^1.0.0"
+  },
+  "publishConfig": { "access": "public" }
+}

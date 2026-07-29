@@ -9,6 +9,16 @@
 
 export * from './request-parser';
 
+// Client-safe query BUILDER (inverse of the parser): builds the nestjsx
+// query-string format the parser consumes. First-party replacement for
+// @dataui/crud-request's RequestQueryBuilder, consumed by @apso/sdk (#38).
+export {
+  RequestQueryBuilder,
+  createQueryBuilder,
+  CondOperator,
+} from './query-builder';
+export type { QueryFilter, QueryJoin, QuerySort } from './query-builder';
+
 // Type-only re-exports so consumers importing these from
 // @nestjsx/crud-request keep working after the import swap (client-safe:
 // types only, sourced from the agnostic core).

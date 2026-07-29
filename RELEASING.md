@@ -13,8 +13,10 @@ each package checks whether its directory changed since that package's last rele
 | `@apso/domain-events` | `typescript/packages/domain-events/` | `ts-domain-events-vX.Y.Z` | npm |
 | `@apso/crud-core` | `typescript/packages/crud-core/` | `ts-crud-core-vX.Y.Z` | npm |
 | `@apso/crud-request` | `typescript/packages/crud-request/` | `ts-crud-request-vX.Y.Z` | npm |
+| `@apso/postgrest-request` | `typescript/packages/postgrest-request/` | `ts-postgrest-request-vX.Y.Z` | npm |
 | `@apso/crud-typeorm` | `typescript/packages/crud-typeorm/` | `ts-crud-typeorm-vX.Y.Z` | npm |
 | `@apso/crud` | `typescript/packages/crud/` | `ts-crud-vX.Y.Z` | npm |
+| `@apso/sdk` | `typescript/packages/sdk/` | `ts-sdk-vX.Y.Z` | npm |
 | `apso-domain-events` | `python/packages/domain-events/` | `py-domain-events-vX.Y.Z` | PyPI |
 | `domainevents` (Go) | `go/domainevents/` | `go/domainevents/vX.Y.Z` | Go proxy (tag only) |
 
