@@ -21,6 +21,9 @@ const mockRepository = {
   create: jest.fn(),
   save: jest.fn(),
   remove: jest.fn(),
+  // refetchByPk (#44 hydrated-echo) re-reads the saved row by PK; echo the
+  // stored value back like a real repository would.
+  findOne: jest.fn().mockImplementation(async ({ where }: any) => ({ id: where.id, refetched: true })),
   target: TestEntity
 } as unknown as Repository<TestEntity>;
 
@@ -370,9 +373,12 @@ describe('TypeOrmCrudService', () => {
 
       const result = await service.createOne(parsedRequest, dto);
 
-      expect(result).toEqual(mockEntity); // bare entity, nestjsx shape
+      // #44 hydrated-echo: createOne returns the PK re-fetch (what a GET
+      // would return), not the save() return value.
+      expect(result).toEqual({ id: 1, refetched: true });
       expect(mockRepository.create).toHaveBeenCalledWith(dto);
       expect(mockRepository.save).toHaveBeenCalledWith(mockEntity);
+      expect(mockRepository.findOne).toHaveBeenCalledWith({ where: { id: 1 } });
     });
   });
 
@@ -381,9 +387,14 @@ describe('TypeOrmCrudService', () => {
       query: {}, options: {},
       parsed: { fields: [], paramsFilter: [], search: {}, filter: [], or: [], join: [], sort: [], limit: 20, offset: 0, page: 1, cache: 0 }
     };
-    it('400s an empty bulk array', async () => {
-      await expect(service.createMany(emptyReq, { bulk: [] } as any)).rejects.toThrow('Empty bulk array');
-      await expect(service.createMany(emptyReq, {} as any)).rejects.toThrow('Empty bulk array');
+    it('400s an empty bulk array with the class-validator message shape', async () => {
+      // nestjsx's @ArrayNotEmpty produces {message: ['bulk should not be empty']};
+      // Nest renders array-message BadRequestExceptions as 'Bad Request Exception'.
+      for (const dto of [{ bulk: [] }, {}]) {
+        const err = await service.createMany(emptyReq, dto as any).catch((e: any) => e);
+        expect(err.getStatus()).toBe(400);
+        expect(err.getResponse().message).toEqual(['bulk should not be empty']);
+      }
     });
   });
 

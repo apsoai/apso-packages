@@ -11,7 +11,7 @@
     "packages/domain-events"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build -w @apso/crud-core -w @apso/crud-request -w @apso/crud-typeorm -w @apso/crud -w @apso/domain-events --if-present",
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "clean": "npm run clean --workspaces --if-present"
