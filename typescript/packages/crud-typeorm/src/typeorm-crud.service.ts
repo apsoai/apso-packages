@@ -34,6 +34,26 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   protected entity: EntityTarget<T>;
   protected options: CrudServiceOptions;
 
+  /**
+   * nestjsx/crud exposes the underlying repository as `repo`; autogen
+   * service overrides (updateOne/replaceOne) use it directly.
+   */
+  protected get repo(): Repository<T> {
+    return this.repository;
+  }
+
+  /**
+   * Repository passthroughs nestjsx/crud's TypeOrmCrudService exposes;
+   * hand-written services call these directly.
+   */
+  public findOne(options?: any): Promise<T | null> {
+    return this.repository.findOne(options);
+  }
+
+  public find(options?: any): Promise<T[]> {
+    return this.repository.find(options);
+  }
+
   constructor(repository: Repository<T>, options?: Partial<CrudServiceOptions>) {
     this.repository = repository;
     this.entity = repository.target as EntityTarget<T>;

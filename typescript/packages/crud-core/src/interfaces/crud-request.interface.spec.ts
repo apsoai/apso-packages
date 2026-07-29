@@ -174,7 +174,7 @@ describe('CRUD Request Interfaces', () => {
         }
       };
 
-      expect(parsed.query.fields).toEqual(['name', 'status']);
+      expect(parsed.query!.fields).toEqual(['name', 'status']);
       expect(parsed.parsed.limit).toBe(20);
       expect(parsed.options.query?.alwaysPaginate).toBe(true);
     });

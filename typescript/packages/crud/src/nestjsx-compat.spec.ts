@@ -50,13 +50,15 @@ describe('nestjsx-compatible @Crud surface', () => {
 
     const service = makeService();
     const controller = new PlainController(service) as PlainController & CrudController<TestEntity>;
+    // *Base handlers receive an ALREADY-parsed request (the @ParsedRequest
+    // param decorator resolves it at Nest runtime; a direct call passes the
+    // argument through) and delegate straight to the service — no extraction.
     const parsed = { search: {}, paramsFilter: [] };
-    await controller.getManyBase!(fakeReq(parsed) as any);
-    // The injected handler unwraps the raw request into the parsed one
+    await controller.getManyBase!(parsed as any);
     expect(service.getMany).toHaveBeenCalledWith(parsed);
 
     const dto = { name: 'x' };
-    await controller.createOneBase!(fakeReq(parsed) as any, dto);
+    await controller.createOneBase!(parsed as any, dto);
     expect(service.createOne).toHaveBeenCalledWith(parsed, dto);
   });
 
@@ -76,15 +78,22 @@ describe('nestjsx-compatible @Crud surface', () => {
     }
 
     const proto = OverridingController.prototype as any;
-    // No injected base handler when an override exists
-    expect(proto.getManyBase).toBeUndefined();
+    // The *Base delegator is ALWAYS provided (autogen overrides call
+    // this.base.getManyBase(req)), even when an override exists.
+    expect(typeof proto.getManyBase).toBe('function');
 
     const controller = new OverridingController(service);
-    const parsed = { search: { id: { $eq: 1 } } };
-    const out = await controller.getMany(fakeReq(parsed) as any);
-    // @ParsedRequest delivered the parsed request, not the raw req
+    // Direct call: @ParsedRequest is a NestJS param decorator, so it is a
+    // no-op outside Nest's pipeline — the argument passes through unchanged,
+    // exactly like nestjsx. (At runtime Nest supplies the parsed request.)
+    const parsed = { search: { id: { $eq: 1 } } } as any;
+    const out = await controller.getMany(parsed);
     expect(service.getMany).toHaveBeenCalledWith(parsed);
     expect(out).toEqual({ wrapped: [{ id: 1 }] });
+
+    // The injected delegator forwards an already-parsed request to service.
+    await proto.getManyBase.call(controller, parsed);
+    expect(service.getMany).toHaveBeenCalledWith(parsed);
   });
 
   it('supports the CreateManyDto bulk shape', () => {

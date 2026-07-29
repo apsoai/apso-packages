@@ -87,7 +87,10 @@ export interface ParsedRequestParams {
 }
 
 export interface ParsedRequest {
-  query: CrudRequestQuery;
+  // Optional: nestjsx's CrudRequest is { parsed, options } only. The
+  // interceptor still populates query, but consumers may construct a
+  // request with just parsed + options.
+  query?: CrudRequestQuery;
   options: CrudRequestOptions;
   parsed: ParsedRequestParams;
 }
@@ -131,6 +134,15 @@ export interface CrudRequestOptions {
   routes?: {
     only?: string[];
     exclude?: string[];
+    // nestjsx allows per-route config keys alongside only/exclude.
+    getManyBase?: any;
+    getOneBase?: any;
+    createOneBase?: any;
+    createManyBase?: any;
+    updateOneBase?: any;
+    replaceOneBase?: any;
+    deleteOneBase?: any;
+    recoverOneBase?: any;
   };
   params?: {
     [key: string]: {

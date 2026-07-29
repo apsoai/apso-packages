@@ -16,12 +16,10 @@ import {
   Body,
   Param,
   Query,
-  Req,
   UseInterceptors,
   SetMetadata
 } from '@nestjs/common';
-import { extractParsedRequest as extractParsed } from './crud-request.interceptor';
-import { findOverride, wrapHandlerParams, BaseRouteName } from './nestjsx-compat';
+import { findOverride, ParsedRequest, BaseRouteName } from './nestjsx-compat';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery, ApiBody } from '@nestjs/swagger';
 import {
   CrudControllerOptions,
@@ -29,7 +27,7 @@ import {
   CRUD_CONTROLLER_METADATA,
   CrudValidationGroups
 } from '@apso/crud-core';
-import { CrudRequestInterceptor, extractParsedRequest } from './crud-request.interceptor';
+import { CrudRequestInterceptor } from './crud-request.interceptor';
 
 /**
  * Main CRUD decorator that configures a controller class for CRUD operations
@@ -393,45 +391,54 @@ const SERVICE_METHOD: Record<string, { op: string; hasBody: boolean }> = {
 };
 
 /**
- * Resolve the handler that should carry a base route's HTTP decorators and
- * inject a delegating handler when the controller has none — this is what
- * makes plain `class X implements CrudController<T>` work like nestjsx:
+ * Wire up one base route, nestjsx-compatibly:
  *
- * order: @Override-marked method > <op>Base > legacy <op> > injected <op>Base
+ * 1. Ensure the *Base delegator method exists on the prototype — a plain
+ *    method that forwards an ALREADY-parsed request to the service. Autogen
+ *    controllers call `this.base.getOneBase(req)` from their @Override
+ *    methods, so it must exist regardless of overrides. It does NOT
+ *    re-extract: the request it receives is already the ParsedRequest
+ *    (from the caller's @ParsedRequest resolution, or a direct unit call).
+ * 2. Pick the route handler: the @Override method if present, else the
+ *    *Base method itself.
+ * 3. Apply the HTTP/Swagger decorators to the route handler.
+ * 4. If the route handler is the injected *Base method (no override in
+ *    source), attach @ParsedRequest to param 0 (+ @Body to param 1 for
+ *    body routes) so Nest resolves them at runtime. Override methods
+ *    already carry @ParsedRequest/@Body in the source.
  */
 function applyMethodDecorators(target: any, legacyName: string, decorators: any[]) {
   const proto = target.prototype;
   const baseName = `${legacyName}Base` as BaseRouteName;
   const spec = SERVICE_METHOD[baseName];
+  if (!spec) return;
 
-  let methodName =
-    findOverride(proto, baseName) ||
-    (typeof proto[baseName] === 'function' ? baseName : undefined) ||
-    (typeof proto[legacyName] === 'function' ? legacyName : undefined);
-
-  if (!methodName && spec) {
-    // Inject the nestjsx-named base handler delegating to the service
+  // (1) ensure the delegator exists
+  if (typeof proto[baseName] !== 'function') {
     if (spec.hasBody) {
       proto[baseName] = function (this: any, req: any, dto: any) {
-        return this.service[spec.op](extractParsed(req), dto);
+        return this.service[spec.op](req, dto);
       };
-      Req()(proto, baseName, 0);
-      Body()(proto, baseName, 1);
     } else {
       proto[baseName] = function (this: any, req: any) {
-        return this.service[spec.op](extractParsed(req));
+        return this.service[spec.op](req);
       };
-      Req()(proto, baseName, 0);
     }
-    methodName = baseName;
   }
 
-  if (!methodName) return;
+  // (2) route handler: override method, else the base method
+  const override = findOverride(proto, baseName);
+  const routeName =
+    override || (typeof proto[legacyName] === 'function' ? legacyName : baseName);
 
-  // @ParsedRequest-marked params on overrides receive the parsed request
-  wrapHandlerParams(proto, methodName);
+  // (4) if the base method is the route handler, it needs param decorators
+  if (routeName === baseName) {
+    ParsedRequest()(proto, baseName, 0);
+    if (spec.hasBody) Body()(proto, baseName, 1);
+  }
 
+  // (3) apply HTTP + Swagger decorators to the route handler
   decorators.forEach(decorator => {
-    decorator(proto, methodName, Object.getOwnPropertyDescriptor(proto, methodName));
+    decorator(proto, routeName, Object.getOwnPropertyDescriptor(proto, routeName));
   });
 }
