@@ -158,17 +158,24 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
 
   async createOne(req: ParsedRequest, dto: DeepPartial<T>): Promise<CreateOneResponse<T>> {
     const entity = this.repository.create(this.withAuthPersist(req, dto) as any);
-    return await this.repository.save(entity) as unknown as T;
+    const saved = await this.repository.save(entity);
+    // nestjsx echoes the PERSISTED value (what a subsequent GET returns), not
+    // the input as-given — e.g. timestamp strings come back re-hydrated
+    // through the driver (#44). Re-fetch by PK to reproduce the read path.
+    return await this.refetchByPk(saved as any) as unknown as T;
   }
 
   async createMany(req: ParsedRequest, dto: CreateManyDto<T>): Promise<CreateManyResponse<T>> {
     // nestjsx validates bulk as a non-empty array (class-validator
     // @ArrayNotEmpty) and 400s an empty payload (#45).
     if (!dto || !Array.isArray(dto.bulk) || dto.bulk.length === 0) {
-      throw new BadRequestException('Empty bulk array');
+      throw new BadRequestException(['bulk should not be empty']);
     }
     const bulk = (dto.bulk as any[]).map(item => this.withAuthPersist(req, item));
     const entities = this.repository.create(bulk);
+    // Unlike createOne, nestjsx's createMany echoes the SAVED entities
+    // as-given (no hydration round-trip) — the parity suite pinned this
+    // asymmetry empirically (#44). Do not refetch here.
     return await this.repository.save(entities) as T[];
   }
 
@@ -199,9 +206,11 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
 
     // PUT keeps the target row's identity (from the route), never the body's.
     const body = this.stripPrimaryKeys(this.withAuthPersist(req, dto));
-    return await this.repository.save(
+    const saved = await this.repository.save(
       { ...body, ...this.primaryKeyValues(entity) } as any
     );
+    // Persisted-echo parity (#44).
+    return await this.refetchByPk(saved as any) as unknown as T;
   }
 
   /**
@@ -274,6 +283,18 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
       const t = this.entity as any;
       return (t && t.name) || 'Entity';
     }
+  }
+
+  /**
+   * Re-fetch an entity by primary key so mutation responses echo exactly what
+   * a subsequent GET returns (persisted/hydrated values, not input-as-given).
+   * Parity with nestjsx 4.5.0 (#44); storage is unaffected.
+   */
+  protected async refetchByPk(saved: Record<string, any>): Promise<T> {
+    const where: Record<string, any> = {};
+    for (const pk of this.rootPrimaryKeys()) where[pk] = saved[pk];
+    const fresh = await this.repository.findOne({ where } as any);
+    return (fresh ?? saved) as T;
   }
 
   /** Primary key property names of the root entity ('id' fallback). */
