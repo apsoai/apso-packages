@@ -70,3 +70,40 @@ denied. See the cross-dialect access-parity test in the parity harness.
 | paginate | `?limit=20&offset=40` | `?limit=20&offset=40` |
 | embed relation | `?join=posts||title` | `?select=id,posts(title)` |
 | force dialect | — | header `X-Crud-Dialect: postgrest` |
+
+## Worked example: one query, both dialects
+
+"Give me the id and name of active authors older than 30, newest first, two
+per page (second page), with each author's published post titles."
+
+nestjsx:
+
+```
+GET /authors?fields=id,name
+  &filter=active||$eq||true
+  &filter=age||$gt||30
+  &join=posts||title
+  &filter=posts.status||$eq||published
+  &sort=age,DESC
+  &limit=2&offset=2
+```
+
+PostgREST:
+
+```
+GET /authors?select=id,name,posts(title)
+  &active=eq.true
+  &age=gt.30
+  &posts.status=eq.published
+  &order=age.desc
+  &limit=2&offset=2
+```
+
+Both parse into the same `ParsedRequest`, hit the same TypeORM query builder
+under the same `options.query.join` allowlist, and return the same rows. The
+response carries `X-Crud-Dialect: nestjsx` or `postgrest` so you can confirm
+which parser ran.
+
+## See also
+
+- [MIGRATION.md](./MIGRATION.md) — migrating from `@nestjsx/crud` to `@apso/crud`.

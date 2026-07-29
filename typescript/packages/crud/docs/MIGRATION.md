@@ -10,6 +10,10 @@ This guide is the exact procedure used to migrate the Apso platform server
 for any `@nestjsx/crud@4.5.0` codebase, including the Acquisition.com
 service.
 
+> After migrating, `@apso/crud` also accepts the PostgREST query dialect
+> (`?select=`, `?col=op.value`, resource embedding) against the same
+> endpoints — no code change. See [DIALECTS.md](./DIALECTS.md).
+
 ## TL;DR
 
 1. Replace the three packages in `package.json`.
