@@ -23,12 +23,14 @@ PKGS=(
   "TS|typescript/packages/domain-events|ts-domain-events-v|npm|@apso/domain-events"
   "CRUDCORE|typescript/packages/crud-core|ts-crud-core-v|npm|@apso/crud-core"
   "CRUDREQ|typescript/packages/crud-request|ts-crud-request-v|npm|@apso/crud-request"
+  "PGREQ|typescript/packages/postgrest-request|ts-postgrest-request-v|npm|@apso/postgrest-request"
   "CRUDTORM|typescript/packages/crud-typeorm|ts-crud-typeorm-v|npm|@apso/crud-typeorm"
   "CRUD|typescript/packages/crud|ts-crud-v|npm|@apso/crud"
+  "SDK|typescript/packages/sdk|ts-sdk-v|npm|@apso/sdk"
   "PY|python/packages/domain-events|py-domain-events-v|pypi|"
   "GO|go/domainevents|go/domainevents/v|go|"
 )
-ALL_IDS="TS CRUDCORE CRUDREQ CRUDTORM CRUD PY GO"
+ALL_IDS="TS CRUDCORE CRUDREQ PGREQ CRUDTORM CRUD SDK PY GO"
 
 bump_semver() { # <x.y.z> <major|minor|patch>
   local IFS=.; read -r MA MI PA <<<"$1"
@@ -103,9 +105,20 @@ prepare() {
       level=initial
       if [ "$TYPE" = go ]; then new=0.1.0; else new=$(manifest_version "$TYPE" "$PATH_"); fi
     else
-      level=$(detect_level "$tag..HEAD" "$PATH_")
-      if [ "$TYPE" = go ]; then new=$(bump_semver "${tag#"$PREFIX"}" "$level")
-      else new=$(bump_semver "$(manifest_version "$TYPE" "$PATH_")" "$level"); fi
+      local tagver mver
+      tagver="${tag#"$PREFIX"}"
+      mver=$([ "$TYPE" = go ] && echo "" || manifest_version "$TYPE" "$PATH_")
+      if [ "$TYPE" != go ] && [ -n "$mver" ] && [ "$mver" != "$tagver" ] \
+         && [ "$(printf '%s\n%s\n' "$tagver" "$mver" | sort -V | tail -1)" = "$mver" ]; then
+        # The manifest version was bumped by hand ABOVE the last tag — honor it
+        # verbatim instead of deriving from commit messages. Lets a release
+        # pin an exact version (e.g. 1.0.1) regardless of feat/fix commit mix.
+        level="manual"; new="$mver"
+      else
+        level=$(detect_level "$tag..HEAD" "$PATH_")
+        if [ "$TYPE" = go ]; then new=$(bump_semver "$tagver" "$level")
+        else new=$(bump_semver "$mver" "$level"); fi
+      fi
     fi
     echo "[$ID] releasing $new (bump: $level)"
 
