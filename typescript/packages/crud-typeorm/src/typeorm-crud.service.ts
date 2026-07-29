@@ -85,7 +85,14 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     const [data, total] = await queryBuilder.getManyAndCount();
 
     const limit = req.parsed.limit || this.options.query?.limit || 20;
-    const page = req.parsed.page || 1;
+    // nestjsx derives the page number from offset when page isn't explicitly
+    // in the query (?offset=2&limit=2 reports page=2). parsed.page defaults
+    // to 1, so key off the raw query to know if page was actually sent — #32.
+    const offset = req.parsed.offset || 0;
+    const pageExplicit = req.query?.page !== undefined && req.query?.page !== null;
+    const page = pageExplicit
+      ? (req.parsed.page || 1)
+      : (limit > 0 ? Math.floor(offset / limit) + 1 : 1);
     const pageCount = Math.ceil(total / limit);
 
     return {

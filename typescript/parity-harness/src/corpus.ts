@@ -52,6 +52,7 @@ export const CORPUS: string[] = [
   '/authors?limit=2',
   '/authors?limit=2&page=2',
   '/authors?limit=2&offset=1',
+  '/authors?limit=2&offset=2',  // #32: page derived from offset
   '/authors?page=1',
 
   // joins (incl. nested)
