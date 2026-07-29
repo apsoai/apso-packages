@@ -583,7 +583,10 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
           params: { [key]: value.map((v: any) => String(v).toLowerCase()) }
         };
       default:
-        throw new BadRequestException(`Unknown filter operator: ${operator}`);
+        // nestjsx runtime behavior: unknown operators inside a search tree
+        // fall through to equality on the value (query-string operators are
+        // validated with a 400 at PARSE time; s= trees are not).
+        return { clause: `${col} = ${p}`, params: { [key]: value } };
     }
   }
 }

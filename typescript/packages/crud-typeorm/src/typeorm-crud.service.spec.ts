@@ -422,10 +422,10 @@ describe('TypeOrmCrudService', () => {
       expect(build('$notnull', undefined)).toEqual({ clause: 'entity.field IS NOT NULL', params: {} });
     });
 
-    it('rejects empty arrays and unknown operators with 400', () => {
+    it('rejects empty arrays with 400; unknown operators fall through to equality (nestjsx s= behavior)', () => {
       expect(() => build('$in', [])).toThrow('$in expects a non-empty array');
       expect(() => build('$between', [1])).toThrow('$between expects exactly two values');
-      expect(() => build('$bogus')).toThrow('Unknown filter operator: $bogus');
+      expect(build('$bogus', 5)).toEqual({ clause: 'entity.field = :p0', params: { p0: 5 } });
     });
   });
 });

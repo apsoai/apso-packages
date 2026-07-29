@@ -62,6 +62,18 @@ export const CORPUS: string[] = [
   '/authors/1?join=posts',
   '/authors?join=nonexistent',                        // not in allowlist: skipped both sides
 
+  // parser edge cases (residual #19): invalid inputs must match nestjsx
+  '/authors?sort=age,SIDEWAYS',
+  '/authors?s={bad json',
+  '/authors?filter=age||$bogus||5',
+  '/authors?filter=age||$in||',
+  '/authors?fields=',
+  '/authors?filter=age',
+  '/authors?filter=name||$eq||',
+  '/authors?filter=age||eq||36',
+  '/authors?sort=age,asc',
+  '/authors?s={"age":{"$bogus":5}}',
+
   // auth filter scoping (scoped-authors has auth.filter -> active: true)
   '/scoped-authors',
   '/scoped-authors?filter=active||$eq||false',        // cannot widen past auth filter

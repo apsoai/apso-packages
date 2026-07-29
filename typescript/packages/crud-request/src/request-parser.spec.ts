@@ -203,11 +203,9 @@ describe('CrudRequestParser', () => {
       });
     });
 
-    it('should handle invalid JSON gracefully', () => {
+    it('rejects invalid JSON with 400 (harness-verified nestjsx behavior)', () => {
       const query = { s: 'invalid json' };
-      const result = parser.parse(query);
-
-      expect(result.parsed.search).toEqual({});
+      expect(() => parser.parse(query)).toThrow('Invalid search param. JSON expected');
     });
   });
 
@@ -240,8 +238,13 @@ describe('CrudRequestParser', () => {
       ]);
     });
 
-    it('should handle case insensitive order', () => {
+    it('rejects non-uppercase order with 400 (harness-verified nestjsx behavior)', () => {
       const query = { sort: 'name,desc' };
+      expect(() => parser.parse(query)).toThrow('Invalid sort order. ASC,DESC expected');
+    });
+
+    it('parses uppercase DESC', () => {
+      const query = { sort: 'name,DESC' };
       const result = parser.parse(query);
 
       expect(result.parsed.sort).toEqual([
