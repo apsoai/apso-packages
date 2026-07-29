@@ -5,10 +5,10 @@
 pagination) and the same controller/service API, so migrating is an
 **import swap** — no controller, service, or DTO logic changes.
 
-This guide is the exact procedure used to migrate the Apso platform server
-(182 files, 528 tests, zero behavior change). It is the recommended path
-for any `@nestjsx/crud@4.5.0` codebase, including the Acquisition.com
-service.
+This guide targets **`@apso/crud` 1.0.1** (the full-parity release). It is
+the exact procedure used to migrate the Apso platform server (182 files,
+528 tests, zero behavior change), and is the recommended path for any
+`@nestjsx/crud@4.5.0` codebase, including the Acquisition.com service.
 
 > After migrating, `@apso/crud` also accepts the PostgREST query dialect
 > (`?select=`, `?col=op.value`, resource embedding) against the same
@@ -28,10 +28,10 @@ service.
 -  "@nestjsx/crud": "4.5.0",
 -  "@nestjsx/crud-request": "4.5.0",
 -  "@nestjsx/crud-typeorm": "4.5.0",
-+  "@apso/crud": "^1.0.0",
-+  "@apso/crud-core": "^1.0.0",
-+  "@apso/crud-request": "^1.0.0",
-+  "@apso/crud-typeorm": "^1.0.0",
++  "@apso/crud": "^1.0.1",
++  "@apso/crud-core": "^1.0.1",
++  "@apso/crud-request": "^1.0.1",
++  "@apso/crud-typeorm": "^1.0.1",
 ```
 
 `@apso/crud-core` is the shared, framework-agnostic base; add it explicitly.
@@ -144,20 +144,31 @@ semantics. Notable fidelity guarantees inherited from nestjsx:
 - `fields=` combined with `join=` keeps the joined relation.
 - Unknown `fields=` columns are silently ignored (no 500).
 - `$inL`/`$notinL` lower only the column, comparing values as given.
-- Bulk create rejects an empty array with 400.
+- Bulk create rejects an empty array with `400` and the class-validator body
+  shape `{ message: ["bulk should not be empty"] }`.
 - `getMany` returns a bare array when unpaginated, the envelope otherwise.
 
-### One thing to confirm: `timestamp` column hydration
+### The one intentional delta: `timestamp` UTC handling (a correctness fix)
 
-`@nestjsx/crud`, via the ValidationPipe + its generated DTOs'
-class-transformer date handling, reinterprets a posted UTC timestamp
-string against the **server's local timezone** on create/replace (e.g. a
-posted `2026-07-04T00:00:00.000Z` is stored/echoed shifted by the server's
-UTC offset). Whether your app sees this depends on your DTOs, not on
-`@apso/crud` — the library's create/read path preserves the exact instant.
-If your service relies on the nestjsx shift, verify the timestamp round-trip
-after migrating; if you keep your existing DTOs, behavior is unchanged.
-(Tracked as apsoai/apso-packages#44.)
+Across the whole differential corpus there is exactly **one** behavioral
+difference from `@nestjsx/crud`, and it is deliberate. On create/replace,
+`@nestjsx/crud` echoes a posted UTC timestamp **shifted by the server's local
+timezone** (e.g. a posted `2026-07-04T00:00:00.000Z` comes back as
+`…T05:00:00.000Z` on a CDT host) — an artifact of the ValidationPipe + its
+generated DTOs' class-transformer date handling. `@apso/crud` echoes the
+**correct UTC instant the client sent**, and its stored value and subsequent
+reads are consistent with it.
+
+This is an **accepted, intentional divergence** — `@apso/crud` does not
+replicate the nestjsx timezone bug. In the parity corpus these create/replace
+cases are marked *expected divergences* (apso correct, nestjsx buggy), so the
+suite is at 147/147 with this delta documented rather than "matched."
+
+What this means for your migration: if your service reads back the plain UTC
+instant it sent, behavior improves (no more surprise shift). The only way to
+notice a change is if downstream code was *depending on* the nestjsx shift —
+unlikely, and a latent bug if so. Keep your existing DTOs and the round-trip
+is otherwise unchanged. (apsoai/apso-packages#44 — resolved by decision.)
 
 ## Rollback
 
