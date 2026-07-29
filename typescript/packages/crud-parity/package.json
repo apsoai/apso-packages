@@ -9,6 +9,11 @@
   },
   "apsoCrudNote": "@apso/crud* are consumed as SOURCE via jest moduleNameMapper + tsconfig paths (see jest.config.js) pointing at the loose local packages, so their nested node_modules cannot introduce duplicate typeorm/@nestjs instances. Switch to workspace deps when the packages move into this repo (#14 step 1).",
   "dependencies": {
+    "@apso/crud": "^1.0.1",
+    "@apso/crud-core": "^1.0.1",
+    "@apso/crud-request": "^1.0.1",
+    "@apso/crud-typeorm": "^1.0.1",
+    "@apso/postgrest-request": "^1.0.0",
     "@electric-sql/pglite": "^0.5.2",
     "@nestjs/common": "^9.3.7",
     "@nestjs/core": "^9.3.7",

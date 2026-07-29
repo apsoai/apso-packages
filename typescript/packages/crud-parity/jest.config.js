@@ -31,11 +31,18 @@ module.exports = {
   testTimeout: 180000,
   transform: { '^.+\\.ts$': ['ts-jest', { tsconfig: '<rootDir>/tsconfig.json' }] },
   moduleNameMapper: {
-    '^@apso/crud$': `${PKGS}/crud/src/index.ts`,
-    '^@apso/crud-core$': `${PKGS}/crud-core/src/index.ts`,
-    '^@apso/crud-request$': `${PKGS}/crud-request/src/index.ts`,
-    '^@apso/crud-typeorm$': `${PKGS}/crud-typeorm/src/index.ts`,
-    '^@apso/postgrest-request$': `${PKGS}/postgrest-request/src/index.ts`,
+    // CRUD_PARITY_TARGET=published resolves @apso/* from node_modules (the
+    // literal npm artifacts) instead of monorepo source — artifact-level
+    // verification of a release. Default: source (fixes flip green pre-publish).
+    ...(process.env.CRUD_PARITY_TARGET === 'published'
+      ? {}
+      : {
+          '^@apso/crud$': `${PKGS}/crud/src/index.ts`,
+          '^@apso/crud-core$': `${PKGS}/crud-core/src/index.ts`,
+          '^@apso/crud-request$': `${PKGS}/crud-request/src/index.ts`,
+          '^@apso/crud-typeorm$': `${PKGS}/crud-typeorm/src/index.ts`,
+          '^@apso/postgrest-request$': `${PKGS}/postgrest-request/src/index.ts`,
+        }),
     '^typeorm$': nm('typeorm'),
     '^@nestjsx/crud$': nm('@nestjsx/crud'),
     '^@nestjsx/crud-request$': nm('@nestjsx/crud-request'),
