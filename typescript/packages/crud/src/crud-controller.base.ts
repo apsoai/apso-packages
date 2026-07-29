@@ -19,7 +19,7 @@ import {
   RecoverOneResponse,
   CrudService
 } from '@apso/crud-core';
-import { extractParsedRequest } from '@apso/crud-request';
+import { extractParsedRequest } from './crud-request.interceptor';
 
 @Injectable()
 export abstract class CrudControllerBase<T> implements ICrudController<T> {

@@ -65,25 +65,42 @@ export type FilterOperator =
   | '$inL'       // in array (case insensitive)
   | '$notinL';   // not in array (case insensitive)
 
-export interface ParsedRequest {
-  query: CrudRequestQuery;
-  options: CrudRequestOptions;
-  parsed: {
-    fields: string[];
-    paramsFilter: FilterCondition[];
-    authPersist?: any;
-    classTransformOptions?: any;
-    search: SearchCondition;
-    filter: FilterCondition[];
-    or: FilterCondition[];
-    join: JoinCondition[];
-    sort: SortCondition[];
-    limit: number;
-    offset: number;
-    page: number;
-    cache: number;
-  };
+/**
+ * The `parsed` shape of a request. nestjsx/crud-request names this
+ * `ParsedRequestParams`; consumers (e.g. an overridden getSelect) import
+ * that name, so it is exported as an alias below.
+ */
+export interface ParsedRequestParams {
+  fields: string[];
+  paramsFilter: FilterCondition[];
+  authPersist?: any;
+  classTransformOptions?: any;
+  search: SearchCondition;
+  filter: FilterCondition[];
+  or: FilterCondition[];
+  join: JoinCondition[];
+  sort: SortCondition[];
+  limit: number;
+  offset: number;
+  page: number;
+  cache: number;
 }
+
+export interface ParsedRequest {
+  // Optional: nestjsx's CrudRequest is { parsed, options } only. The
+  // interceptor still populates query, but consumers may construct a
+  // request with just parsed + options.
+  query?: CrudRequestQuery;
+  options: CrudRequestOptions;
+  parsed: ParsedRequestParams;
+}
+
+/**
+ * nestjsx/crud-request search-condition type. Alias of SearchCondition so
+ * consumers importing `SCondition` from @nestjsx/crud-request keep working
+ * after the import swap.
+ */
+export type SCondition = SearchCondition;
 
 /**
  * Access-control options, nestjsx/crud-compatible.
@@ -117,6 +134,15 @@ export interface CrudRequestOptions {
   routes?: {
     only?: string[];
     exclude?: string[];
+    // nestjsx allows per-route config keys alongside only/exclude.
+    getManyBase?: any;
+    getOneBase?: any;
+    createOneBase?: any;
+    createManyBase?: any;
+    updateOneBase?: any;
+    replaceOneBase?: any;
+    deleteOneBase?: any;
+    recoverOneBase?: any;
   };
   params?: {
     [key: string]: {
@@ -126,4 +152,22 @@ export interface CrudRequestOptions {
     };
   };
   auth?: CrudAuthOptions;
+}
+
+/**
+ * nestjsx/crud `QueryOptions`: the per-controller query options object.
+ * Exported so consumers that reference it (e.g. an overridden getSelect
+ * signature) keep compiling after the import swap.
+ */
+export interface QueryOptions {
+  allow?: string[];
+  exclude?: string[];
+  persist?: string[];
+  filter?: any;
+  join?: any;
+  sort?: any;
+  limit?: number;
+  maxLimit?: number;
+  alwaysPaginate?: boolean;
+  cache?: number;
 }

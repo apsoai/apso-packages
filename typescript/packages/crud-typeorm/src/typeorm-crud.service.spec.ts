@@ -376,6 +376,62 @@ describe('TypeOrmCrudService', () => {
     });
   });
 
+  describe('createMany empty-bulk guard (#45)', () => {
+    const emptyReq: ParsedRequest = {
+      query: {}, options: {},
+      parsed: { fields: [], paramsFilter: [], search: {}, filter: [], or: [], join: [], sort: [], limit: 20, offset: 0, page: 1, cache: 0 }
+    };
+    it('400s an empty bulk array', async () => {
+      await expect(service.createMany(emptyReq, { bulk: [] } as any)).rejects.toThrow('Empty bulk array');
+      await expect(service.createMany(emptyReq, {} as any)).rejects.toThrow('Empty bulk array');
+    });
+  });
+
+  describe('primary-key safety on mutations (#43)', () => {
+    const reqTargeting = (id: number): ParsedRequest => ({
+      query: {},
+      options: {},
+      parsed: {
+        fields: [],
+        paramsFilter: [{ field: 'id', operator: '$eq', value: id }],
+        search: { id: { $eq: id } },
+        filter: [],
+        or: [],
+        join: [],
+        sort: [],
+        limit: 20,
+        offset: 0,
+        page: 1,
+        cache: 0
+      }
+    });
+
+    it('updateOne ignores a primary key in the body (keeps the fetched row id)', async () => {
+      const existing = { id: 1, name: 'Original', status: 'Active' };
+      (mockQueryBuilder.getOne as jest.Mock).mockResolvedValue(existing);
+      (mockRepository.save as jest.Mock).mockImplementation(async (e) => e);
+
+      // Client echoes a fetched entity back with a different id
+      await service.updateOne(reqTargeting(1), { id: 999, name: 'Changed' } as any);
+
+      const saved = (mockRepository.save as jest.Mock).mock.calls[0][0];
+      expect(saved.id).toBe(1);      // NOT 999 — identity preserved
+      expect(saved.name).toBe('Changed');
+    });
+
+    it('replaceOne targets the route id, not a body id', async () => {
+      const existing = { id: 1, name: 'Original', status: 'Active' };
+      (mockQueryBuilder.getOne as jest.Mock).mockResolvedValue(existing);
+      (mockRepository.save as jest.Mock).mockImplementation(async (e) => e);
+
+      await service.replaceOne(reqTargeting(1), { id: 999, name: 'Replaced', status: 'Draft' } as any);
+
+      const saved = (mockRepository.save as jest.Mock).mock.calls[0][0];
+      expect(saved.id).toBe(1);      // route wins over body
+      expect(saved.name).toBe('Replaced');
+    });
+  });
+
   describe('buildCondition', () => {
     const build = (operator: string, value: any = 'value') =>
       (service as any).buildCondition('field', operator, value, { n: 0 });
@@ -404,9 +460,10 @@ describe('TypeOrmCrudService', () => {
         clause: 'entity.field NOT IN (:...p0)',
         params: { p0: [1, 2] }
       });
+      // #41: L-variant multi-value ops lower only the column; values as given
       expect(build('$inL', ['A', 'B'])).toEqual({
         clause: 'LOWER(entity.field) IN (:...p0)',
-        params: { p0: ['a', 'b'] }
+        params: { p0: ['A', 'B'] }
       });
     });
 

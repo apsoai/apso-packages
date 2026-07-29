@@ -1,9 +1,11 @@
 /**
- * CRUD Request Interceptor
+ * CRUD Request Interceptor (NestJS).
  *
- * This interceptor automatically parses incoming HTTP requests and converts
- * query parameters into structured ParsedRequest objects that are attached
- * to the request context.
+ * Lives in the @apso/crud (NestJS) package, NOT @apso/crud-request, which
+ * must stay client-safe (no @nestjs dependency) so the SDK/browser can build
+ * queries with the parser. This interceptor parses the request via the
+ * client-safe CrudRequestParser and maps its framework-agnostic
+ * RequestQueryException to a 400, mirroring @nestjsx/crud.
  */
 
 import {
@@ -11,7 +13,8 @@ import {
   NestInterceptor,
   ExecutionContext,
   CallHandler,
-  Inject
+  Inject,
+  BadRequestException,
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import { Reflector } from '@nestjs/core';
@@ -20,9 +23,10 @@ import {
   CrudRequestOptions,
   PARSED_CRUD_REQUEST_KEY,
   CRUD_OPTIONS_METADATA,
-  CRUD_AUTH_OPTIONS_METADATA
+  CRUD_AUTH_OPTIONS_METADATA,
+  RequestQueryException,
 } from '@apso/crud-core';
-import { CrudRequestParser } from './request-parser';
+import { CrudRequestParser } from '@apso/crud-request';
 
 @Injectable()
 export class CrudRequestInterceptor implements NestInterceptor {
@@ -59,11 +63,16 @@ export class CrudRequestInterceptor implements NestInterceptor {
       }
     }
 
-    // Parse the request
-    const parsedRequest = parser.parse(request.query, request.params, authContext);
-
-    // Attach parsed request to the request object
-    request[PARSED_CRUD_REQUEST_KEY] = parsedRequest;
+    // Parse the request; map the parser's agnostic validation error to 400
+    try {
+      const parsedRequest = parser.parse(request.query, request.params, authContext);
+      request[PARSED_CRUD_REQUEST_KEY] = parsedRequest;
+    } catch (e) {
+      if (e instanceof RequestQueryException) {
+        throw new BadRequestException(e.message);
+      }
+      throw e;
+    }
 
     return next.handle();
   }

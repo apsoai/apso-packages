@@ -12,5 +12,8 @@ export * from './interfaces';
 // Export all constants
 export * from './constants';
 
+// Framework-agnostic errors
+export * from './errors';
+
 // Version info
 export const APSO_CRUD_VERSION = '1.0.0';

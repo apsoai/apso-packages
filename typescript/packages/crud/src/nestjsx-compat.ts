@@ -6,9 +6,13 @@
  *   '@nestjsx/crud'         -> '@apso/crud'
  *   '@nestjsx/crud-typeorm' -> '@apso/crud-typeorm'
  */
-import { Body, Req } from '@nestjs/common';
-import { ParsedRequest as ParsedRequestType, CrudAuthOptions, CRUD_AUTH_OPTIONS_METADATA } from '@apso/crud-core';
-import { extractParsedRequest } from '@apso/crud-request';
+import { Body, createParamDecorator, ExecutionContext } from '@nestjs/common';
+import {
+  ParsedRequest as ParsedRequestType,
+  CrudAuthOptions,
+  CRUD_AUTH_OPTIONS_METADATA,
+  PARSED_CRUD_REQUEST_KEY,
+} from '@apso/crud-core';
 
 /** nestjsx name for the parsed request type. */
 export type CrudRequest = ParsedRequestType;
@@ -67,17 +71,18 @@ export function Override(name?: BaseRouteName): MethodDecorator {
 }
 
 /**
- * nestjsx @ParsedRequest(): injects the parsed CrudRequest into a handler
- * parameter. Implemented as @Req() + a runtime extract wrapper installed by
- * the @Crud decorator (see wrapHandlerParams), so the handler receives the
- * parsed request directly, exactly like nestjsx.
+ * nestjsx @ParsedRequest(): a NestJS custom param decorator that extracts
+ * the parsed CrudRequest (attached by CrudRequestInterceptor) at request
+ * time. Because it resolves through Nest's param pipeline, a direct unit
+ * call — controller.getOne(someParsedRequest) — receives its argument
+ * unchanged, exactly like nestjsx (no eager wrapping).
  */
-export function ParsedRequest(): ParameterDecorator {
-  return (target, key, index) => {
-    markParam(target, key as string, index, 'parsedRequest');
-    Req()(target, key, index);
-  };
-}
+export const ParsedRequest = createParamDecorator(
+  (_data: unknown, ctx: ExecutionContext) => {
+    const req = ctx.switchToHttp().getRequest();
+    return req[PARSED_CRUD_REQUEST_KEY];
+  },
+);
 
 /**
  * nestjsx @ParsedBody(): the request body (bulk-aware typing is the
@@ -87,43 +92,6 @@ export function ParsedBody(): ParameterDecorator {
   return (target, key, index) => {
     Body()(target, key, index);
   };
-}
-
-const PARSED_PARAMS_METADATA = 'APSO_CRUD_PARSED_PARAMS';
-
-function markParam(target: any, key: string, index: number, kind: string): void {
-  const existing = Reflect.getMetadata(PARSED_PARAMS_METADATA, target, key) || [];
-  existing.push({ index, kind });
-  Reflect.defineMetadata(PARSED_PARAMS_METADATA, existing, target, key);
-}
-
-/**
- * Wrap a handler so parameters marked by @ParsedRequest receive the parsed
- * request extracted from the raw request object.
- */
-export function wrapHandlerParams(proto: any, methodName: string): void {
-  const marks: Array<{ index: number; kind: string }> =
-    Reflect.getMetadata(PARSED_PARAMS_METADATA, proto, methodName) || [];
-  if (marks.length === 0) return;
-
-  const original = proto[methodName];
-  if (typeof original !== 'function' || (original as any).__apsoParsedWrapped) return;
-
-  const wrapped = function (this: any, ...args: any[]) {
-    for (const mark of marks) {
-      if (mark.kind === 'parsedRequest' && args[mark.index] !== undefined) {
-        args[mark.index] = extractParsedRequest(args[mark.index]);
-      }
-    }
-    return original.apply(this, args);
-  };
-  (wrapped as any).__apsoParsedWrapped = true;
-
-  // Preserve existing metadata (route params, etc.) on the wrapper
-  Reflect.getMetadataKeys(original).forEach(k => {
-    Reflect.defineMetadata(k, Reflect.getMetadata(k, original), wrapped);
-  });
-  proto[methodName] = wrapped;
 }
 
 /** Resolve the @Override target method name for a base route, if any. */

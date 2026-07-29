@@ -178,17 +178,20 @@ export interface CrudControllerOptions {
   };
 
   /**
-   * Validation configuration
+   * Validation configuration. `false` disables validation entirely, matching
+   * nestjsx/crud (autogen controllers commonly set `validation: false`).
    */
-  validation?: {
-    transform?: boolean;
-    whitelist?: boolean;
-    forbidNonWhitelisted?: boolean;
-    validationError?: {
-      target?: boolean;
-      value?: boolean;
-    };
-  };
+  validation?:
+    | false
+    | {
+        transform?: boolean;
+        whitelist?: boolean;
+        forbidNonWhitelisted?: boolean;
+        validationError?: {
+          target?: boolean;
+          value?: boolean;
+        };
+      };
 }
 
 export type CrudRoutes =

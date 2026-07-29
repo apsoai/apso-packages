@@ -5,7 +5,6 @@
  * into structured ParsedRequest objects for use by CRUD services.
  */
 
-import { BadRequestException } from '@nestjs/common';
 import {
   ParsedRequest,
   CrudRequestQuery,
@@ -16,7 +15,8 @@ import {
   FilterOperator,
   CrudRequestOptions,
   DEFAULT_PAGE_SIZE,
-  DEFAULT_MAX_LIMIT
+  DEFAULT_MAX_LIMIT,
+  RequestQueryException
 } from '@apso/crud-core';
 
 
@@ -31,7 +31,7 @@ const VALID_OPERATORS = new Set(OPERATOR_LIST.split(','));
 function normalizeOperator(op: string): FilterOperator {
   const trimmed = op.trim();
   if (!VALID_OPERATORS.has(trimmed)) {
-    throw new BadRequestException(`Invalid comparison operator. ${OPERATOR_LIST} expected`);
+    throw new RequestQueryException(`Invalid comparison operator. ${OPERATOR_LIST} expected`);
   }
   return (trimmed.startsWith('$') ? trimmed : `$${trimmed}`) as FilterOperator;
 }
@@ -281,21 +281,21 @@ export class CrudRequestParser {
       const [field, operator] = parts;
       const op = normalizeOperator(operator);
       if (op !== '$isnull' && op !== '$notnull') {
-        throw new BadRequestException('Invalid filter value');
+        throw new RequestQueryException('Invalid filter value');
       }
       return { field: field.trim(), operator: op, value: undefined };
     }
 
     if (parts.length !== 3) {
       // nestjsx: a filter without operator/value is invalid
-      throw new BadRequestException('Invalid filter value');
+      throw new RequestQueryException('Invalid filter value');
     }
 
     const [field, operator, value] = parts;
     const op = normalizeOperator(operator);
 
     if (value === '' && op !== '$isnull' && op !== '$notnull') {
-      throw new BadRequestException('Invalid filter value');
+      throw new RequestQueryException('Invalid filter value');
     }
 
     return {
@@ -313,7 +313,7 @@ export class CrudRequestParser {
     try {
       return JSON.parse(search);
     } catch {
-      throw new BadRequestException('Invalid search param. JSON expected');
+      throw new RequestQueryException('Invalid search param. JSON expected');
     }
   }
 
@@ -331,7 +331,7 @@ export class CrudRequestParser {
         const field = parts[0].trim();
         const rawOrder = (parts[1] ?? 'ASC').trim();
         if (rawOrder !== 'ASC' && rawOrder !== 'DESC') {
-          throw new BadRequestException('Invalid sort order. ASC,DESC expected');
+          throw new RequestQueryException('Invalid sort order. ASC,DESC expected');
         }
         result.push({ field, order: rawOrder });
       }

@@ -23,7 +23,9 @@ import {
   CrudServiceOptions,
   FilterCondition,
   SortCondition,
-  JoinCondition
+  JoinCondition,
+  ParsedRequestParams,
+  QueryOptions
 } from '@apso/crud-core';
 
 @Injectable()
@@ -31,6 +33,26 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   protected repository: Repository<T>;
   protected entity: EntityTarget<T>;
   protected options: CrudServiceOptions;
+
+  /**
+   * nestjsx/crud exposes the underlying repository as `repo`; autogen
+   * service overrides (updateOne/replaceOne) use it directly.
+   */
+  protected get repo(): Repository<T> {
+    return this.repository;
+  }
+
+  /**
+   * Repository passthroughs nestjsx/crud's TypeOrmCrudService exposes;
+   * hand-written services call these directly.
+   */
+  public findOne(options?: any): Promise<T | null> {
+    return this.repository.findOne(options);
+  }
+
+  public find(options?: any): Promise<T[]> {
+    return this.repository.find(options);
+  }
 
   constructor(repository: Repository<T>, options?: Partial<CrudServiceOptions>) {
     this.repository = repository;
@@ -55,9 +77,12 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   async getMany(req: ParsedRequest): Promise<GetManyResponse<T>> {
     const queryBuilder = this.repository.createQueryBuilder('entity');
 
-    // Joins first: WHERE and ORDER BY may reference join aliases
-    const aliases = this.applyJoins(queryBuilder, req);
+    // Root selection FIRST: .select() replaces the column list, so it must
+    // run before applyJoins' leftJoinAndSelect appends the relation columns,
+    // otherwise `fields=` would wipe the joined data (#40). WHERE and ORDER
+    // BY still need the aliases applyJoins registers.
     this.applySelect(queryBuilder, req);
+    const aliases = this.applyJoins(queryBuilder, req);
     this.applyWhere(queryBuilder, req, aliases);
     this.applySort(queryBuilder, req, aliases);
 
@@ -82,7 +107,14 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     const [data, total] = await queryBuilder.getManyAndCount();
 
     const limit = req.parsed.limit || this.options.query?.limit || 20;
-    const page = req.parsed.page || 1;
+    // nestjsx derives the page number from offset when page isn't explicitly
+    // in the query (?offset=2&limit=2 reports page=2). parsed.page defaults
+    // to 1, so key off the raw query to know if page was actually sent — #32.
+    const offset = req.parsed.offset || 0;
+    const pageExplicit = req.query?.page !== undefined && req.query?.page !== null;
+    const page = pageExplicit
+      ? (req.parsed.page || 1)
+      : (limit > 0 ? Math.floor(offset / limit) + 1 : 1);
     const pageCount = Math.ceil(total / limit);
 
     return {
@@ -110,8 +142,9 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   async getOne(req: ParsedRequest): Promise<GetOneResponse<T>> {
     const queryBuilder = this.repository.createQueryBuilder('entity');
 
-    const aliases = this.applyJoins(queryBuilder, req);
+    // Root selection before joins (see getMany / #40).
     this.applySelect(queryBuilder, req);
+    const aliases = this.applyJoins(queryBuilder, req);
     this.applyWhere(queryBuilder, req, aliases);
 
     const entity = await queryBuilder.getOne();
@@ -129,6 +162,11 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   }
 
   async createMany(req: ParsedRequest, dto: CreateManyDto<T>): Promise<CreateManyResponse<T>> {
+    // nestjsx validates bulk as a non-empty array (class-validator
+    // @ArrayNotEmpty) and 400s an empty payload (#45).
+    if (!dto || !Array.isArray(dto.bulk) || dto.bulk.length === 0) {
+      throw new BadRequestException('Empty bulk array');
+    }
     const bulk = (dto.bulk as any[]).map(item => this.withAuthPersist(req, item));
     const entities = this.repository.create(bulk);
     return await this.repository.save(entities) as T[];
@@ -143,9 +181,11 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
       throw new NotFoundException(`${this.entityName()} not found`);
     }
 
-    return await this.repository.save(
-      { ...entity, ...this.withAuthPersist(req, dto) } as any
-    );
+    // nestjsx strips primary keys from the update body: a client echoing a
+    // fetched entity back through PATCH (or sending {id: 999}) must never
+    // rewrite the row's identity. The target row is always the fetched one.
+    const body = this.stripPrimaryKeys(this.withAuthPersist(req, dto));
+    return await this.repository.save({ ...entity, ...body } as any);
   }
 
   async replaceOne(req: ParsedRequest, dto: T): Promise<ReplaceOneResponse<T>> {
@@ -157,7 +197,11 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
       throw new NotFoundException(`${this.entityName()} not found`);
     }
 
-    return await this.repository.save(this.withAuthPersist(req, dto) as any);
+    // PUT keeps the target row's identity (from the route), never the body's.
+    const body = this.stripPrimaryKeys(this.withAuthPersist(req, dto));
+    return await this.repository.save(
+      { ...body, ...this.primaryKeyValues(entity) } as any
+    );
   }
 
   /**
@@ -169,6 +213,25 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     const persist = req.parsed.authPersist;
     if (!persist || typeof persist !== 'object') return dto;
     return { ...dto, ...persist };
+  }
+
+  /** Remove primary-key fields from a mutation body (nestjsx behavior). */
+  protected stripPrimaryKeys<D>(dto: D): D {
+    if (!dto || typeof dto !== 'object') return dto;
+    const out: any = { ...(dto as any) };
+    for (const pk of this.rootPrimaryKeys()) {
+      delete out[pk];
+    }
+    return out;
+  }
+
+  /** The fetched entity's primary-key field/value map. */
+  protected primaryKeyValues(entity: T): Record<string, any> {
+    const out: Record<string, any> = {};
+    for (const pk of this.rootPrimaryKeys()) {
+      out[pk] = (entity as any)[pk];
+    }
+    return out;
   }
 
   async deleteOne(req: ParsedRequest): Promise<DeleteOneResponse<T>> {
@@ -223,18 +286,35 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   }
 
   /**
+   * Known column property names of the root entity, or null when metadata is
+   * unavailable (mock repositories in unit tests) — null means "don't
+   * filter", preserving prior behavior.
+   */
+  protected rootColumnNames(): Set<string> | null {
+    try {
+      return new Set(this.repository.metadata.columns.map(c => c.propertyName));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * nestjsx-compatible protected override point: subclasses override
    * getSelect to adjust column selection (platform/server's autogen
    * services override it for the issue-#777 dedup, which the base now
    * does anyway).
    */
   protected getSelect(
-    parsed: ParsedRequest['parsed'],
-    _options: CrudServiceOptions['query']
+    parsed: ParsedRequestParams,
+    _options?: QueryOptions
   ): string[] {
+    // nestjsx silently drops unknown field names (clients build field lists
+    // dynamically; a stale name must not 500 the endpoint — #42).
+    const known = this.rootColumnNames();
+    const requested = (parsed.fields || []).filter(f => !known || known.has(f));
     // nestjsx always includes the primary key(s), PK first; dedup fixes
     // nestjsx issue #777.
-    const uniqueFields = [...new Set([...this.rootPrimaryKeys(), ...(parsed.fields || [])])];
+    const uniqueFields = [...new Set([...this.rootPrimaryKeys(), ...requested])];
     return uniqueFields.map(field => `entity.${field}`);
   }
 
@@ -572,15 +652,18 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
       case '$exclL':   return { clause: `LOWER(${col}) NOT LIKE ${p}`, params: { [key]: `%${String(value).toLowerCase()}%` } };
       case '$inL':
         requireArray();
+        // nestjsx L-variant multi-value ops lower only the COLUMN; values
+        // are compared as given (#41).
         return {
           clause: `LOWER(${col}) IN (:...${key})`,
-          params: { [key]: value.map((v: any) => String(v).toLowerCase()) }
+          params: { [key]: value }
         };
       case '$notinL':
         requireArray();
+        // Values as given, column lowered (#41).
         return {
           clause: `LOWER(${col}) NOT IN (:...${key})`,
-          params: { [key]: value.map((v: any) => String(v).toLowerCase()) }
+          params: { [key]: value }
         };
       default:
         // nestjsx runtime behavior: unknown operators inside a search tree

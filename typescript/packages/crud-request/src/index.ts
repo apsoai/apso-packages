@@ -1,10 +1,22 @@
 /**
  * @apso/crud-request
  *
- * Request parsing and validation for the Apso CRUD framework.
- * Handles all nestjsx/crud query parameter formats and converts them
- * into structured objects for CRUD operations.
+ * Client-safe request parsing for the Apso CRUD framework: converts
+ * nestjsx/crud query-parameter formats into structured objects. No
+ * @nestjs / server / ORM dependency — safe to bundle in a browser/SDK.
+ * The NestJS interceptor lives in @apso/crud.
  */
 
 export * from './request-parser';
-export * from './crud-request.interceptor';
+
+// Type-only re-exports so consumers importing these from
+// @nestjsx/crud-request keep working after the import swap (client-safe:
+// types only, sourced from the agnostic core).
+export type {
+  ParsedRequestParams,
+  SCondition,
+  ParsedRequest,
+  SearchCondition,
+  FilterCondition,
+  CrudRequestOptions,
+} from '@apso/crud-core';

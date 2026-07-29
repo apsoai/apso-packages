@@ -52,6 +52,7 @@ export const CORPUS: string[] = [
   '/authors?limit=2',
   '/authors?limit=2&page=2',
   '/authors?limit=2&offset=1',
+  '/authors?limit=2&offset=2',  // #32: page derived from offset
   '/authors?page=1',
 
   // joins (incl. nested)
@@ -59,8 +60,22 @@ export const CORPUS: string[] = [
   '/authors?join=posts&filter=posts.status||$eq||published',
   '/authors?join=posts&join=posts.comments',
   '/authors?join=posts||title',
+  '/authors?fields=name&join=posts',
+  '/authors?fields=name&join=posts||title',
+  '/authors/1?fields=name&join=posts',
   '/authors/1?join=posts',
   '/authors?join=nonexistent',                        // not in allowlist: skipped both sides
+
+  // #42: unknown column in fields= is silently ignored, not a 500
+  '/authors?fields=name,notacolumn',
+  '/authors?fields=notacolumn',
+  '/authors/1?fields=name,bogus',
+
+  // #41: $inL/$notinL lower only the column, values as given
+  '/authors?filter=name||$inL||ada,cleo',
+  '/authors?filter=name||$inL||ADA,CLEO',
+  '/authors?filter=name||$notinL||ada,cleo',
+  '/authors?filter=plan||$inL||pro,team',
 
   // parser edge cases (residual #19): invalid inputs must match nestjsx
   '/authors?sort=age,SIDEWAYS',
