@@ -59,6 +59,9 @@ export const CORPUS: string[] = [
   '/authors?join=posts&filter=posts.status||$eq||published',
   '/authors?join=posts&join=posts.comments',
   '/authors?join=posts||title',
+  '/authors?fields=name&join=posts',
+  '/authors?fields=name&join=posts||title',
+  '/authors/1?fields=name&join=posts',
   '/authors/1?join=posts',
   '/authors?join=nonexistent',                        // not in allowlist: skipped both sides
 

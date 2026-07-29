@@ -55,9 +55,12 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   async getMany(req: ParsedRequest): Promise<GetManyResponse<T>> {
     const queryBuilder = this.repository.createQueryBuilder('entity');
 
-    // Joins first: WHERE and ORDER BY may reference join aliases
-    const aliases = this.applyJoins(queryBuilder, req);
+    // Root selection FIRST: .select() replaces the column list, so it must
+    // run before applyJoins' leftJoinAndSelect appends the relation columns,
+    // otherwise `fields=` would wipe the joined data (#40). WHERE and ORDER
+    // BY still need the aliases applyJoins registers.
     this.applySelect(queryBuilder, req);
+    const aliases = this.applyJoins(queryBuilder, req);
     this.applyWhere(queryBuilder, req, aliases);
     this.applySort(queryBuilder, req, aliases);
 
@@ -110,8 +113,9 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   async getOne(req: ParsedRequest): Promise<GetOneResponse<T>> {
     const queryBuilder = this.repository.createQueryBuilder('entity');
 
-    const aliases = this.applyJoins(queryBuilder, req);
+    // Root selection before joins (see getMany / #40).
     this.applySelect(queryBuilder, req);
+    const aliases = this.applyJoins(queryBuilder, req);
     this.applyWhere(queryBuilder, req, aliases);
 
     const entity = await queryBuilder.getOne();
