@@ -1,0 +1,60 @@
+{
+  "name": "@apso/sdk",
+  "version": "1.1.1",
+  "description": "SDK for Apso services, offering easy access to OpenAPI-compliant CRUD operations.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "author": "Apso by Mavric <hello@apso.dev>",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/apsoai/apso-packages.git",
+    "directory": "typescript/packages/sdk"
+  },
+  "homepage": "https://github.com/apsoai/apso-packages/tree/main/typescript/packages/sdk",
+  "bugs": {
+    "url": "https://github.com/apsoai/apso-packages/issues"
+  },
+  "keywords": [
+    "apso",
+    "sdk",
+    "api-client",
+    "crud",
+    "rest-client",
+    "typescript",
+    "nestjs-crud",
+    "query-builder",
+    "openapi"
+  ],
+  "files": [
+    "dist/**/*"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc",
+    "test": "jest",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@apidevtools/swagger-parser": "^10.0.0",
+    "@apso/crud-request": "^1.0.0",
+    "axios": "^1.7.8",
+    "openapi-types": "^9.0.0",
+    "swagger-to-ts": "^1.4.6"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "axios-mock-adapter": "^2.1.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
+    "typescript": "^5.0.4"
+  },
+  "jest": {
+    "transform": {
+      "^.+\\.tsx?$": "ts-jest"
+    },
+    "testEnvironment": "node"
+  }
+}
