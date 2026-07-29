@@ -158,11 +158,13 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
 
   async createOne(req: ParsedRequest, dto: DeepPartial<T>): Promise<CreateOneResponse<T>> {
     const entity = this.repository.create(this.withAuthPersist(req, dto) as any);
-    const saved = await this.repository.save(entity);
-    // nestjsx echoes the PERSISTED value (what a subsequent GET returns), not
-    // the input as-given — e.g. timestamp strings come back re-hydrated
-    // through the driver (#44). Re-fetch by PK to reproduce the read path.
-    return await this.refetchByPk(saved as any) as unknown as T;
+    // Echo the saved entity as-is. This is an INTENDED divergence from
+    // @nestjsx/crud (#44): on a timestamp column, nestjsx re-hydrates the
+    // echoed value through the server's local timezone, so a posted UTC
+    // instant comes back shifted; @apso/crud echoes the correct UTC instant.
+    // We do NOT replicate that timezone bug (Matt's decision, 2026-07-29) —
+    // the parity corpus marks #44 as an accepted divergence, not a mismatch.
+    return await this.repository.save(entity) as unknown as T;
   }
 
   async createMany(req: ParsedRequest, dto: CreateManyDto<T>): Promise<CreateManyResponse<T>> {
@@ -173,9 +175,8 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     }
     const bulk = (dto.bulk as any[]).map(item => this.withAuthPersist(req, item));
     const entities = this.repository.create(bulk);
-    // Unlike createOne, nestjsx's createMany echoes the SAVED entities
-    // as-given (no hydration round-trip) — the parity suite pinned this
-    // asymmetry empirically (#44). Do not refetch here.
+    // Echo the saved entities as-given (same as createOne — #44 timestamp
+    // divergence from nestjsx is intended, not replicated).
     return await this.repository.save(entities) as T[];
   }
 
@@ -206,11 +207,11 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
 
     // PUT keeps the target row's identity (from the route), never the body's.
     const body = this.stripPrimaryKeys(this.withAuthPersist(req, dto));
-    const saved = await this.repository.save(
+    // Echo the saved entity as-is; the #44 timestamp divergence is intended
+    // (see createOne — we keep the correct UTC instant, not nestjsx's shift).
+    return await this.repository.save(
       { ...body, ...this.primaryKeyValues(entity) } as any
     );
-    // Persisted-echo parity (#44).
-    return await this.refetchByPk(saved as any) as unknown as T;
   }
 
   /**
@@ -283,18 +284,6 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
       const t = this.entity as any;
       return (t && t.name) || 'Entity';
     }
-  }
-
-  /**
-   * Re-fetch an entity by primary key so mutation responses echo exactly what
-   * a subsequent GET returns (persisted/hydrated values, not input-as-given).
-   * Parity with nestjsx 4.5.0 (#44); storage is unaffected.
-   */
-  protected async refetchByPk(saved: Record<string, any>): Promise<T> {
-    const where: Record<string, any> = {};
-    for (const pk of this.rootPrimaryKeys()) where[pk] = saved[pk];
-    const fresh = await this.repository.findOne({ where } as any);
-    return (fresh ?? saved) as T;
   }
 
   /** Primary key property names of the root entity ('id' fallback). */

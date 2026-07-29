@@ -1,6 +1,6 @@
 {
   "name": "@apso/crud-request",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Request parsing and validation for Apso CRUD framework",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

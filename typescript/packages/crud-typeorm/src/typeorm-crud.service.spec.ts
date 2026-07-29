@@ -21,9 +21,7 @@ const mockRepository = {
   create: jest.fn(),
   save: jest.fn(),
   remove: jest.fn(),
-  // refetchByPk (#44 hydrated-echo) re-reads the saved row by PK; echo the
-  // stored value back like a real repository would.
-  findOne: jest.fn().mockImplementation(async ({ where }: any) => ({ id: where.id, refetched: true })),
+  findOne: jest.fn(),
   target: TestEntity
 } as unknown as Repository<TestEntity>;
 
@@ -373,12 +371,13 @@ describe('TypeOrmCrudService', () => {
 
       const result = await service.createOne(parsedRequest, dto);
 
-      // #44 hydrated-echo: createOne returns the PK re-fetch (what a GET
-      // would return), not the save() return value.
-      expect(result).toEqual({ id: 1, refetched: true });
+      // #44 (intended divergence): createOne echoes the SAVED entity as-is —
+      // the correct UTC instant — not a re-fetch. We do not replicate
+      // nestjsx's timezone-shifted persisted-echo.
+      expect(result).toEqual(mockEntity);
       expect(mockRepository.create).toHaveBeenCalledWith(dto);
       expect(mockRepository.save).toHaveBeenCalledWith(mockEntity);
-      expect(mockRepository.findOne).toHaveBeenCalledWith({ where: { id: 1 } });
+      expect(mockRepository.findOne).not.toHaveBeenCalled();
     });
   });
 

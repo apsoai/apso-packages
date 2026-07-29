@@ -105,9 +105,20 @@ prepare() {
       level=initial
       if [ "$TYPE" = go ]; then new=0.1.0; else new=$(manifest_version "$TYPE" "$PATH_"); fi
     else
-      level=$(detect_level "$tag..HEAD" "$PATH_")
-      if [ "$TYPE" = go ]; then new=$(bump_semver "${tag#"$PREFIX"}" "$level")
-      else new=$(bump_semver "$(manifest_version "$TYPE" "$PATH_")" "$level"); fi
+      local tagver mver
+      tagver="${tag#"$PREFIX"}"
+      mver=$([ "$TYPE" = go ] && echo "" || manifest_version "$TYPE" "$PATH_")
+      if [ "$TYPE" != go ] && [ -n "$mver" ] && [ "$mver" != "$tagver" ] \
+         && [ "$(printf '%s\n%s\n' "$tagver" "$mver" | sort -V | tail -1)" = "$mver" ]; then
+        # The manifest version was bumped by hand ABOVE the last tag — honor it
+        # verbatim instead of deriving from commit messages. Lets a release
+        # pin an exact version (e.g. 1.0.1) regardless of feat/fix commit mix.
+        level="manual"; new="$mver"
+      else
+        level=$(detect_level "$tag..HEAD" "$PATH_")
+        if [ "$TYPE" = go ]; then new=$(bump_semver "$tagver" "$level")
+        else new=$(bump_semver "$mver" "$level"); fi
+      fi
     fi
     echo "[$ID] releasing $new (bump: $level)"
 
