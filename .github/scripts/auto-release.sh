@@ -16,12 +16,19 @@ set -uo pipefail
 
 PHASE="${1:?usage: auto-release.sh prepare|finalize}"
 
-# id | path | tag-prefix | type
+# id | path | tag-prefix | type | npm-name (npm only)
+# npm entries are ordered by dependency: crud-core before crud-request and
+# crud-typeorm, which come before crud (matters for a coherent first release).
 PKGS=(
-  "TS|typescript/packages/domain-events|ts-domain-events-v|npm"
-  "PY|python/packages/domain-events|py-domain-events-v|pypi"
-  "GO|go/domainevents|go/domainevents/v|go"
+  "TS|typescript/packages/domain-events|ts-domain-events-v|npm|@apso/domain-events"
+  "CRUDCORE|typescript/packages/crud-core|ts-crud-core-v|npm|@apso/crud-core"
+  "CRUDREQ|typescript/packages/crud-request|ts-crud-request-v|npm|@apso/crud-request"
+  "CRUDTORM|typescript/packages/crud-typeorm|ts-crud-typeorm-v|npm|@apso/crud-typeorm"
+  "CRUD|typescript/packages/crud|ts-crud-v|npm|@apso/crud"
+  "PY|python/packages/domain-events|py-domain-events-v|pypi|"
+  "GO|go/domainevents|go/domainevents/v|go|"
 )
+ALL_IDS="TS CRUDCORE CRUDREQ CRUDTORM CRUD PY GO"
 
 bump_semver() { # <x.y.z> <major|minor|patch>
   local IFS=.; read -r MA MI PA <<<"$1"
@@ -48,12 +55,12 @@ manifest_version() {
 set_state() { echo "$1=$2" >>"$GITHUB_ENV"; }
 
 # --- per-package publish (return non-zero on failure) ---------------------------
-do_ts() { # <version>
-  local v="$1" path=typescript/packages/domain-events
-  ( cd typescript && npm ci && npm run build -w @apso/domain-events && npm test -w @apso/domain-events ) || return 1
+do_ts() { # <version> <path> <npm-name> <id>
+  local v="$1" path="$2" name="$3" id="$4"
+  ( cd typescript && npm ci && npm run build -w "$name" && npm test -w "$name" ) || return 1
   ( cd "$path" && npm version "$v" --no-git-tag-version --allow-same-version ) || return 1
-  if npm view "@apso/domain-events@$v" version >/dev/null 2>&1; then
-    echo "[TS] @apso/domain-events@$v already on npm — skip publish"
+  if npm view "$name@$v" version >/dev/null 2>&1; then
+    echo "[$id] $name@$v already on npm — skip publish"
   else
     ( cd "$path" && npm publish --access public ) || return 1
   fi
@@ -84,7 +91,7 @@ do_go() { # validate; resolves deps + writes go.sum (committed in finalize)
 prepare() {
   local failed=0
   for entry in "${PKGS[@]}"; do
-    IFS='|' read -r ID PATH_ PREFIX TYPE <<<"$entry"
+    IFS='|' read -r ID PATH_ PREFIX TYPE NPM_NAME <<<"$entry"
     local tag; tag=$(last_tag "$PREFIX")
 
     if [ -n "$tag" ] && git diff --quiet "$tag" HEAD -- "$PATH_"; then
@@ -104,7 +111,7 @@ prepare() {
 
     local ok=1
     case "$TYPE" in
-      npm)  do_ts  "$new" || ok=0;;
+      npm)  do_ts  "$new" "$PATH_" "$NPM_NAME" "$ID" || ok=0;;
       pypi) do_py  "$new" || ok=0;;
       go)   do_go         || ok=0;;
     esac
@@ -127,7 +134,7 @@ finalize() {
   git add -A
   if ! git diff --cached --quiet; then
     local bumped=""
-    for ID in TS PY GO; do
+    for ID in $ALL_IDS; do
       local r="${ID}_RELEASE" v="${ID}_VERSION"
       [ "${!r:-false}" = true ] && bumped="$bumped $ID@${!v:-}"
     done
@@ -135,7 +142,7 @@ finalize() {
     git push origin "HEAD:${GITHUB_REF_NAME}"
   fi
 
-  for ID in TS PY GO; do
+  for ID in $ALL_IDS; do
     local r="${ID}_RELEASE"; [ "${!r:-false}" = true ] || continue
     local v="${ID}_VERSION" p="${ID}_PREFIX"; local tag="${!p}${!v}"
     if git ls-remote --tags origin | grep -q "refs/tags/${tag}$"; then

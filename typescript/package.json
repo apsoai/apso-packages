@@ -4,6 +4,10 @@
   "private": true,
   "description": "Apso first-party TypeScript libraries (npm workspace root).",
   "workspaces": [
+    "packages/crud",
+    "packages/crud-core",
+    "packages/crud-request",
+    "packages/crud-typeorm",
     "packages/domain-events"
   ],
   "scripts": {
