@@ -104,7 +104,17 @@ export class PostgrestRequestParser {
       cache: 0,
     };
 
-    return { query: {}, options: this.options, parsed };
+    // Pass through the pagination-relevant RAW keys. The engine reads
+    // req.query (not req.parsed) to decide the response shape: an offset
+    // present => paginated envelope + row skip; absent => bare array (the
+    // nestjsx contract, decidePagination / #32). Without this, the same
+    // `?limit=&offset=` query would paginate under nestjsx but not PostgREST.
+    // PostgREST has no `page` param, so page is always derived from offset.
+    const rawQuery: Record<string, any> = {};
+    if (query.limit !== undefined) rawQuery.limit = query.limit;
+    if (query.offset !== undefined) rawQuery.offset = query.offset;
+
+    return { query: rawQuery, options: this.options, parsed };
   }
 
   /**

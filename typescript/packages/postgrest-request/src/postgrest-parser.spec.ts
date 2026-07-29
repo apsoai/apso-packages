@@ -101,6 +101,17 @@ describe('PostgrestRequestParser', () => {
     });
   });
 
+  describe('raw query pass-through (pagination parity)', () => {
+    it('passes limit/offset onto req.query so the engine paginates like nestjsx', () => {
+      // The engine reads req.query (not req.parsed) to decide envelope + skip.
+      const r = p.parse({ order: 'id.asc', limit: '2', offset: '1' });
+      expect(r.query).toEqual({ limit: '2', offset: '1' });
+    });
+    it('omits pagination keys that were not sent (bare array, no skip)', () => {
+      expect(p.parse({ select: 'id' }).query).toEqual({});
+    });
+  });
+
   describe('search tree', () => {
     it('ANDs multiple filters', () => {
       const parsed = p.parse({ active: 'eq.true', age: 'gt.30' }).parsed;
