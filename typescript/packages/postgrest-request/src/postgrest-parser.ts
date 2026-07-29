@@ -17,6 +17,7 @@ import {
   ParsedRequest,
   ParsedRequestParams,
   FilterCondition,
+  JoinCondition,
   SearchCondition,
   SortCondition,
   FilterOperator,
@@ -74,7 +75,7 @@ export class PostgrestRequestParser {
     params: any = {},
     authContext: { filter?: SearchCondition; or?: SearchCondition; persist?: Record<string, any> } = {},
   ): ParsedRequest {
-    const fields = this.parseSelect(query.select);
+    const { fields, join } = this.parseSelect(query.select);
     const sort = this.parseOrder(query.order);
     const { limit, offset } = this.parsePagination(query);
     const conditions = this.parseFilters(query, params);
@@ -88,7 +89,11 @@ export class PostgrestRequestParser {
       search,
       filter: conditions,
       or: [],
-      join: [], // embeds handled in @apso/crud (see #50)
+      // Embedded resources map to the SAME JoinCondition[] the nestjsx join
+      // path produces; @apso/crud's applyJoins enforces the identical
+      // options.query.join allowlist + #17 auth, so a PostgREST embed can
+      // never reach a relation the nestjsx join would deny (#50).
+      join,
       sort,
       limit: limit ?? this.options.query?.limit ?? DEFAULT_PAGE_SIZE,
       offset: offset ?? 0,
@@ -102,32 +107,102 @@ export class PostgrestRequestParser {
     return { query: {}, options: this.options, parsed };
   }
 
-  /** ?select=col1,col2  (renaming/casting/embeds are #50/#54). */
-  private parseSelect(select: unknown): string[] {
-    if (typeof select !== 'string' || select.trim() === '') return [];
-    return select
-      .split(',')
-      .map(s => s.trim())
-      // strip embeds `rel(...)` for the core field list; plain columns only.
-      .filter(s => s.length > 0 && !s.includes('('))
-      .map(s => {
-        // drop a `::type` cast first, then take the column from an
-        // `alias:column` rename (the column is what we select).
-        const noCast = s.split('::')[0];
-        const parts = noCast.split(':');
-        return parts[parts.length - 1].trim();
-      });
+  /**
+   * ?select=col1,col2,rel(col,sub(col))
+   *
+   * Plain columns become the root field list; embedded resources become
+   * JoinCondition[] with dotted paths (`rel`, `rel.sub`) — the exact shape
+   * the nestjsx join path emits — so the shared engine applies the same
+   * allowlist + auth. Handles `alias:col` rename, `col::type` cast, and
+   * embed aliasing (`alias:rel(...)`). The `!inner`/`!left` request-level
+   * join-type hint is stripped (deferred to #54); the allowlist governs
+   * access either way.
+   */
+  private parseSelect(select: unknown): { fields: string[]; join: JoinCondition[] } {
+    if (typeof select !== 'string' || select.trim() === '') return { fields: [], join: [] };
+    return this.parseSelectTree(select, '');
   }
 
-  /** ?order=col.desc.nullslast,col2.asc */
+  private parseSelectTree(select: string, prefix: string): { fields: string[]; join: JoinCondition[] } {
+    const fields: string[] = [];
+    const join: JoinCondition[] = [];
+    for (const raw of this.splitTopLevel(select)) {
+      const tok = raw.trim();
+      if (tok === '') continue;
+      const open = tok.indexOf('(');
+      if (open === -1) {
+        // plain column: drop `::type` cast, then take the column from an
+        // `alias:column` rename (the column is what we select).
+        const noCast = tok.split('::')[0];
+        const parts = noCast.split(':');
+        const col = parts[parts.length - 1].trim();
+        if (col === '*' || col === '') continue; // `*` = all columns → no explicit field
+        fields.push(col);
+      } else {
+        // embed: `[alias:]relation[!hint](innerSelect)`
+        const head = tok.slice(0, open);
+        const inner = tok.slice(open + 1, tok.lastIndexOf(')'));
+        let rel = head.includes(':') ? head.split(':').pop()! : head;
+        rel = rel.split('!')[0].trim(); // drop the !inner/!left hint
+        if (!rel) throw new RequestQueryException(`Invalid embed in select: ${tok}`);
+        const path = prefix ? `${prefix}.${rel}` : rel;
+        const sub = this.parseSelectTree(inner, path);
+        // `rel(*)` / `rel()` → no explicit select → full leftJoinAndSelect,
+        // matching a nestjsx join with no column list.
+        join.push(sub.fields.length > 0 ? { field: path, select: sub.fields } : { field: path });
+        join.push(...sub.join);
+      }
+    }
+    return { fields, join };
+  }
+
+  /** Split on commas that are NOT inside parentheses (for nested embeds). */
+  private splitTopLevel(s: string): string[] {
+    const out: string[] = [];
+    let depth = 0;
+    let cur = '';
+    for (const ch of s) {
+      if (ch === '(') { depth++; cur += ch; }
+      else if (ch === ')') { depth--; cur += ch; }
+      else if (ch === ',' && depth === 0) { out.push(cur); cur = ''; }
+      else cur += ch;
+    }
+    if (cur.trim() !== '') out.push(cur);
+    return out;
+  }
+
+  /**
+   * ?order=col.desc.nullslast,col2.asc
+   * Embedded: ?order=rel(col).desc  → sort on the dotted `rel.col`, which
+   * the engine resolves through the same alias registry the embed registers.
+   */
   private parseOrder(order: unknown): SortCondition[] {
     if (order === undefined || order === null) return [];
-    const items = Array.isArray(order) ? order : String(order).split(',');
+    // Split at top level so `rel(col).desc,other` isn't broken inside parens.
+    const items = Array.isArray(order)
+      ? order.map(String)
+      : this.splitTopLevel(String(order));
     const result: SortCondition[] = [];
     for (const raw of items) {
-      const parts = String(raw).trim().split('.');
-      if (!parts[0]) continue;
-      const field = parts[0];
+      const t = String(raw).trim();
+      if (!t) continue;
+      let field: string;
+      let parts: string[];
+      const open = t.indexOf('(');
+      if (open !== -1) {
+        // embedded order: rel(col).dir[.nullsX]
+        const rel = t.slice(0, open).trim();
+        const close = t.indexOf(')', open);
+        if (close === -1) throw new RequestQueryException(`Invalid embedded order: ${t}`);
+        const col = t.slice(open + 1, close).trim();
+        if (!rel || !col) throw new RequestQueryException(`Invalid embedded order: ${t}`);
+        field = `${rel}.${col}`;
+        parts = [field, ...t.slice(close + 1).split('.').filter(Boolean)];
+      } else {
+        parts = t.split('.');
+        field = parts[0];
+      }
+      if (!field) continue;
       let dir: 'ASC' | 'DESC' = 'ASC';
       let nulls: 'NULLS FIRST' | 'NULLS LAST' | undefined;
       for (const mod of parts.slice(1)) {
