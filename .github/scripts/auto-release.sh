@@ -23,12 +23,13 @@ PKGS=(
   "TS|typescript/packages/domain-events|ts-domain-events-v|npm|@apso/domain-events"
   "CRUDCORE|typescript/packages/crud-core|ts-crud-core-v|npm|@apso/crud-core"
   "CRUDREQ|typescript/packages/crud-request|ts-crud-request-v|npm|@apso/crud-request"
+  "PGREQ|typescript/packages/postgrest-request|ts-postgrest-request-v|npm|@apso/postgrest-request"
   "CRUDTORM|typescript/packages/crud-typeorm|ts-crud-typeorm-v|npm|@apso/crud-typeorm"
   "CRUD|typescript/packages/crud|ts-crud-v|npm|@apso/crud"
   "PY|python/packages/domain-events|py-domain-events-v|pypi|"
   "GO|go/domainevents|go/domainevents/v|go|"
 )
-ALL_IDS="TS CRUDCORE CRUDREQ CRUDTORM CRUD PY GO"
+ALL_IDS="TS CRUDCORE CRUDREQ PGREQ CRUDTORM CRUD PY GO"
 
 bump_semver() { # <x.y.z> <major|minor|patch>
   local IFS=.; read -r MA MI PA <<<"$1"

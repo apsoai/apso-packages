@@ -554,11 +554,12 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
       sort.forEach((sortCondition, index) => {
         const field = this.resolveField(sortCondition.field, aliases);
         const order = sortCondition.order;
+        const nulls = sortCondition.nulls; // PostgREST nulls placement
 
         if (index === 0) {
-          queryBuilder.orderBy(field, order);
+          queryBuilder.orderBy(field, order, nulls);
         } else {
-          queryBuilder.addOrderBy(field, order);
+          queryBuilder.addOrderBy(field, order, nulls);
         }
       });
     }
@@ -684,6 +685,17 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
         // Values as given, column lowered (#41).
         return {
           clause: `LOWER(${col}) NOT IN (:...${key})`,
+          params: { [key]: value }
+        };
+      case '$like':
+        // Raw LIKE — caller supplies the wildcards (PostgREST like, after
+        // its * -> % conversion in the parser). No auto-wrapping.
+        return { clause: `${col} LIKE ${p}`, params: { [key]: value } };
+      case '$ilike':
+        // Case-insensitive raw LIKE, portable (LOWER both sides) — PostgREST
+        // ilike. Value already has % wildcards from the parser.
+        return {
+          clause: `LOWER(${col}) LIKE LOWER(${p})`,
           params: { [key]: value }
         };
       default:

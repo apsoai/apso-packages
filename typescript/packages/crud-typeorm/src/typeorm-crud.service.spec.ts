@@ -225,8 +225,8 @@ describe('TypeOrmCrudService', () => {
 
       await service.getMany(parsedRequest);
 
-      expect(mockQueryBuilder.orderBy).toHaveBeenCalledWith('entity.name', 'ASC');
-      expect(mockQueryBuilder.addOrderBy).toHaveBeenCalledWith('entity.createdAt', 'DESC');
+      expect(mockQueryBuilder.orderBy).toHaveBeenCalledWith('entity.name', 'ASC', undefined);
+      expect(mockQueryBuilder.addOrderBy).toHaveBeenCalledWith('entity.createdAt', 'DESC', undefined);
     });
 
     it('should apply join conditions', async () => {
@@ -452,6 +452,11 @@ describe('TypeOrmCrudService', () => {
       expect(build('$ne')).toEqual({ clause: 'entity.field != :p0', params: { p0: 'value' } });
       expect(build('$gt', 5)).toEqual({ clause: 'entity.field > :p0', params: { p0: 5 } });
       expect(build('$lte', 5)).toEqual({ clause: 'entity.field <= :p0', params: { p0: 5 } });
+    });
+
+    it('$like / $ilike take raw patterns (PostgREST dialect, values pre-wildcarded)', () => {
+      expect(build('$like', '%ada%')).toEqual({ clause: 'entity.field LIKE :p0', params: { p0: '%ada%' } });
+      expect(build('$ilike', 'A%')).toEqual({ clause: 'LOWER(entity.field) LIKE LOWER(:p0)', params: { p0: 'A%' } });
     });
 
     it('wraps LIKE values at build time', () => {
