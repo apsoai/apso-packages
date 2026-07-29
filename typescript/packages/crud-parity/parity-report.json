@@ -3,7 +3,7 @@
   "reference": "@nestjsx/crud@4.5.0",
   "candidate": "@apso/crud@local",
   "total": 123,
-  "mismatched": 6,
+  "mismatched": 0,
   "byCategory": {
     "baseline": {
       "total": 2,
@@ -11,7 +11,7 @@
     },
     "fields": {
       "total": 3,
-      "failed": 1
+      "failed": 0
     },
     "filter": {
       "total": 18,
@@ -19,7 +19,7 @@
     },
     "filter-L": {
       "total": 8,
-      "failed": 2
+      "failed": 0
     },
     "or": {
       "total": 3,
@@ -43,7 +43,7 @@
     },
     "pagination": {
       "total": 5,
-      "failed": 1
+      "failed": 0
     },
     "getone": {
       "total": 4,
@@ -71,419 +71,16 @@
     },
     "join-select": {
       "total": 4,
-      "failed": 1
+      "failed": 0
     },
     "errors": {
       "total": 11,
-      "failed": 1
+      "failed": 0
     },
     "auth-scope": {
       "total": 7,
       "failed": 0
     }
   },
-  "mismatches": [
-    {
-      "id": "fields-with-join",
-      "category": "fields",
-      "path": "/posts?fields=title&join=author||name&sort=id,ASC",
-      "reference": {
-        "status": 200,
-        "body": [
-          {
-            "author": {
-              "id": 1,
-              "name": "Ada Lovelace"
-            },
-            "id": 1,
-            "title": "Notes on the Engine"
-          },
-          {
-            "author": {
-              "id": 2,
-              "name": "Grace Hopper"
-            },
-            "id": 2,
-            "title": "Bugs and Moths"
-          },
-          {
-            "author": {
-              "id": 3,
-              "name": "alan turing"
-            },
-            "id": 3,
-            "title": "On Computable Numbers"
-          },
-          {
-            "author": {
-              "id": 1,
-              "name": "Ada Lovelace"
-            },
-            "id": 4,
-            "title": "engine internals"
-          },
-          {
-            "author": {
-              "id": 2,
-              "name": "Grace Hopper"
-            },
-            "id": 5,
-            "title": "Compilers 101"
-          },
-          {
-            "author": {
-              "id": 3,
-              "name": "alan turing"
-            },
-            "id": 6,
-            "title": "Imitation Game"
-          }
-        ]
-      },
-      "candidate": {
-        "status": 200,
-        "body": [
-          {
-            "id": 1,
-            "title": "Notes on the Engine"
-          },
-          {
-            "id": 2,
-            "title": "Bugs and Moths"
-          },
-          {
-            "id": 3,
-            "title": "On Computable Numbers"
-          },
-          {
-            "id": 4,
-            "title": "engine internals"
-          },
-          {
-            "id": 5,
-            "title": "Compilers 101"
-          },
-          {
-            "id": 6,
-            "title": "Imitation Game"
-          }
-        ]
-      },
-      "match": false
-    },
-    {
-      "id": "filterL-inL",
-      "category": "filter-L",
-      "path": "/authors?filter=name||$inL||ADA LOVELACE,GRACE HOPPER&sort=id,ASC",
-      "reference": {
-        "status": 200,
-        "body": []
-      },
-      "candidate": {
-        "status": 200,
-        "body": [
-          {
-            "active": true,
-            "age": 36,
-            "email": "ada@example.com",
-            "id": 1,
-            "name": "Ada Lovelace"
-          },
-          {
-            "active": true,
-            "age": 85,
-            "email": "GRACE@example.com",
-            "id": 2,
-            "name": "Grace Hopper"
-          }
-        ]
-      },
-      "match": false
-    },
-    {
-      "id": "filterL-notinL",
-      "category": "filter-L",
-      "path": "/authors?filter=name||$notinL||ADA LOVELACE&sort=id,ASC",
-      "reference": {
-        "status": 200,
-        "body": [
-          {
-            "active": true,
-            "age": 36,
-            "email": "ada@example.com",
-            "id": 1,
-            "name": "Ada Lovelace"
-          },
-          {
-            "active": true,
-            "age": 85,
-            "email": "GRACE@example.com",
-            "id": 2,
-            "name": "Grace Hopper"
-          },
-          {
-            "active": false,
-            "age": 41,
-            "email": "alan@example.com",
-            "id": 3,
-            "name": "alan turing"
-          }
-        ]
-      },
-      "candidate": {
-        "status": 200,
-        "body": [
-          {
-            "active": true,
-            "age": 85,
-            "email": "GRACE@example.com",
-            "id": 2,
-            "name": "Grace Hopper"
-          },
-          {
-            "active": false,
-            "age": 41,
-            "email": "alan@example.com",
-            "id": 3,
-            "name": "alan turing"
-          }
-        ]
-      },
-      "match": false
-    },
-    {
-      "id": "page-offset",
-      "category": "pagination",
-      "path": "/posts?limit=2&offset=2&sort=id,ASC",
-      "reference": {
-        "status": 200,
-        "body": {
-          "count": 2,
-          "data": [
-            {
-              "authorId": 3,
-              "body": "entscheidungsproblem",
-              "createdAt": "2026-03-20T13:15:00.000Z",
-              "id": 3,
-              "published": true,
-              "score": "99.99",
-              "title": "On Computable Numbers",
-              "views": 999
-            },
-            {
-              "authorId": 1,
-              "body": "lowercase title case test",
-              "createdAt": "2026-03-20T13:15:00.000Z",
-              "id": 4,
-              "published": false,
-              "score": "10.50",
-              "title": "engine internals",
-              "views": 10
-            }
-          ],
-          "page": 2,
-          "pageCount": 3,
-          "total": 6
-        }
-      },
-      "candidate": {
-        "status": 200,
-        "body": {
-          "count": 2,
-          "data": [
-            {
-              "authorId": 3,
-              "body": "entscheidungsproblem",
-              "createdAt": "2026-03-20T13:15:00.000Z",
-              "id": 3,
-              "published": true,
-              "score": "99.99",
-              "title": "On Computable Numbers",
-              "views": 999
-            },
-            {
-              "authorId": 1,
-              "body": "lowercase title case test",
-              "createdAt": "2026-03-20T13:15:00.000Z",
-              "id": 4,
-              "published": false,
-              "score": "10.50",
-              "title": "engine internals",
-              "views": 10
-            }
-          ],
-          "page": 1,
-          "pageCount": 3,
-          "total": 6
-        }
-      },
-      "match": false
-    },
-    {
-      "id": "jsel-root-and-join-fields",
-      "category": "join-select",
-      "path": "/posts?fields=title&join=comments||text&sort=id,ASC",
-      "reference": {
-        "status": 200,
-        "body": [
-          {
-            "comments": [
-              {
-                "id": 1,
-                "text": "brilliant"
-              },
-              {
-                "id": 2,
-                "text": "Fascinating read"
-              },
-              {
-                "id": 12,
-                "text": "archived note"
-              }
-            ],
-            "id": 1,
-            "title": "Notes on the Engine"
-          },
-          {
-            "comments": [
-              {
-                "id": 3,
-                "text": "found a moth"
-              },
-              {
-                "id": 11,
-                "text": "moth was real"
-              }
-            ],
-            "id": 2,
-            "title": "Bugs and Moths"
-          },
-          {
-            "comments": [
-              {
-                "id": 4,
-                "text": "UNDECIDABLE"
-              },
-              {
-                "id": 5,
-                "text": "halting problem"
-              },
-              {
-                "id": 10,
-                "text": "Third opinion"
-              }
-            ],
-            "id": 3,
-            "title": "On Computable Numbers"
-          },
-          {
-            "comments": [
-              {
-                "id": 6,
-                "text": "needs more detail"
-              }
-            ],
-            "id": 4,
-            "title": "engine internals"
-          },
-          {
-            "comments": [
-              {
-                "id": 7,
-                "text": "compile this"
-              }
-            ],
-            "id": 5,
-            "title": "Compilers 101"
-          },
-          {
-            "comments": [
-              {
-                "id": 8,
-                "text": "great movie too"
-              },
-              {
-                "id": 9,
-                "text": "second thoughts"
-              }
-            ],
-            "id": 6,
-            "title": "Imitation Game"
-          }
-        ]
-      },
-      "candidate": {
-        "status": 200,
-        "body": [
-          {
-            "id": 1,
-            "title": "Notes on the Engine"
-          },
-          {
-            "id": 2,
-            "title": "Bugs and Moths"
-          },
-          {
-            "id": 3,
-            "title": "On Computable Numbers"
-          },
-          {
-            "id": 4,
-            "title": "engine internals"
-          },
-          {
-            "id": 5,
-            "title": "Compilers 101"
-          },
-          {
-            "id": 6,
-            "title": "Imitation Game"
-          }
-        ]
-      },
-      "match": false
-    },
-    {
-      "id": "err-unknown-field-select",
-      "category": "errors",
-      "path": "/posts?fields=title,notacolumn&sort=id,ASC",
-      "reference": {
-        "status": 200,
-        "body": [
-          {
-            "id": 1,
-            "title": "Notes on the Engine"
-          },
-          {
-            "id": 2,
-            "title": "Bugs and Moths"
-          },
-          {
-            "id": 3,
-            "title": "On Computable Numbers"
-          },
-          {
-            "id": 4,
-            "title": "engine internals"
-          },
-          {
-            "id": 5,
-            "title": "Compilers 101"
-          },
-          {
-            "id": 6,
-            "title": "Imitation Game"
-          }
-        ]
-      },
-      "candidate": {
-        "status": 500,
-        "body": {
-          "message": "Internal server error",
-          "statusCode": 500
-        }
-      },
-      "match": false
-    }
-  ]
+  "mismatches": []
 }
