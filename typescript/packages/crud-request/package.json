@@ -1,0 +1,40 @@
+{
+  "name": "@apso/crud-request",
+  "version": "1.0.0",
+  "description": "Request parsing and validation for Apso CRUD framework",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/**/*"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "dev": "tsc --watch",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "lint": "tsc -p tsconfig.json --noEmit && bash ../../scripts/no-server-imports.sh crud-request",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "crud",
+    "nestjs",
+    "request-parsing",
+    "validation",
+    "query-parser"
+  ],
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@apso/crud-core": "^1.0.0"
+  },
+  "devDependencies": {
+    "@nestjs/testing": "^10.0.0",
+    "@types/jest": "^29.4.0",
+    "@types/node": "^18.13.0",
+    "@typescript-eslint/eslint-plugin": "^5.51.0",
+    "@typescript-eslint/parser": "^5.51.0",
+    "eslint": "^8.57.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.0.5",
+    "typescript": "^5.0.0"
+  }
+}
