@@ -12,6 +12,21 @@ describe('PostgrestRequestParser', () => {
       expect(p.parse({ select: 'id,alias:name,age::text,posts(id)' }).parsed.fields)
         .toEqual(['id', 'name', 'age']);
     });
+    it('records alias:column renames in fieldAliases keyed by column (#57)', () => {
+      const parsed = p.parse({ select: 'id,name:title' }).parsed;
+      expect(parsed.fields).toEqual(['id', 'title']);
+      expect(parsed.fieldAliases).toEqual({ title: 'name' });
+    });
+    it('leaves fieldAliases undefined when no rename is present (#57)', () => {
+      expect(p.parse({ select: 'id,title' }).parsed.fieldAliases).toBeUndefined();
+    });
+  });
+
+  describe('dialect marker (#58/#60)', () => {
+    it('always tags the parsed request as postgrest', () => {
+      expect(p.parse({ select: 'id' }).parsed.dialect).toBe('postgrest');
+      expect(p.parse({}).parsed.dialect).toBe('postgrest');
+    });
   });
 
   describe('comparison operators', () => {
@@ -150,14 +165,27 @@ describe('PostgrestRequestParser', () => {
       const parsed = p.parse({ select: 'title,actors(*)' }).parsed;
       expect(parsed.join).toEqual([{ field: 'actors' }]);
     });
-    it('strips the !inner/!left join-type hint from the relation name', () => {
+    it('strips the !inner hint from the relation name but marks it embedInner (#59)', () => {
       const parsed = p.parse({ select: 'title,actors!inner(first_name)' }).parsed;
-      expect(parsed.join).toEqual([{ field: 'actors', select: ['first_name'] }]);
+      // The relation name is clean; the parent-level filter intent rides on
+      // embedInner so the engine keeps the !inner predicate in WHERE.
+      expect(parsed.join).toEqual([{ field: 'actors', select: ['first_name'], embedInner: true }]);
     });
-    it('embedded filter (rel.col=op.val) lands in the search tree as a dotted key', () => {
-      // The engine resolves the dotted key through the alias the embed registers.
+    it('default embedded filter (rel.col=op.val) lands in the join ON, keeping parents (#59)', () => {
+      // PostgREST default: an embedded filter shapes ONLY the embedded rows, so
+      // it goes in the JOIN ON (join.on), NOT the WHERE — every parent stays.
       const parsed = p.parse({ select: 'title,actors(*)', 'actors.first_name': 'eq.Jehanne' }).parsed;
+      expect(parsed.search).toEqual({});
+      expect(parsed.join).toEqual([
+        { field: 'actors', on: [{ field: 'first_name', operator: '$eq', value: 'Jehanne' }] },
+      ]);
+    });
+    it('!inner embedded filter stays in the search tree as a parent-level filter (#59)', () => {
+      // !inner is the parent filter: the predicate belongs in WHERE (drops
+      // non-matching parents), resolved through the embed alias.
+      const parsed = p.parse({ select: 'title,actors!inner(*)', 'actors.first_name': 'eq.Jehanne' }).parsed;
       expect(parsed.search).toEqual({ 'actors.first_name': { $eq: 'Jehanne' } });
+      expect((parsed.join[0] as any).on).toBeUndefined();
     });
     it('embedded order rel(col).desc → sort on the dotted rel.col', () => {
       const parsed = p.parse({ select: 'title,directors(last_name)', order: 'directors(last_name).desc' }).parsed;

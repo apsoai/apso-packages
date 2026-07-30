@@ -49,7 +49,16 @@ const CORPUS: Array<{ desc: string; nestjsx: any; postgrest: any; params?: any }
   { desc: 'embed relation with columns', nestjsx: { fields: 'id', join: 'posts||title', sort: 'id,ASC' }, postgrest: { select: 'id,posts(title)', order: 'id.asc' } },
   // both select root id only + all post columns, so the only difference under
   // test is the embedded filter itself (not column selection).
-  { desc: 'filter on embedded relation', nestjsx: { fields: 'id', join: 'posts', filter: 'posts.status||$eq||published', sort: 'id,ASC' }, postgrest: { select: 'id,posts(*)', 'posts.status': 'eq.published', order: 'id.asc' } },
+  //
+  // #59: a DEFAULT PostgREST embedded filter (`posts.status=eq.published`) is
+  // NOT equivalent to a nestjsx `filter=posts.status||...` — the nestjsx filter
+  // is a WHERE (drops parents with no matching child), while PostgREST's default
+  // embedded filter shapes ONLY the embedded rows (all parents return, empties
+  // included). That divergence is asserted directly by the crud-parity
+  // conformance case pg-embed-filter-keeps-parents. The dialects DO reconverge
+  // under PostgREST `!inner`, which is the parent-level (WHERE) filter — that is
+  // the equivalent construction, tested here.
+  { desc: '!inner embedded filter matches nestjsx WHERE-on-join (#59)', nestjsx: { fields: 'id', join: 'posts', filter: 'posts.status||$eq||published', sort: 'id,ASC' }, postgrest: { select: 'id,posts!inner(*)', 'posts.status': 'eq.published', order: 'id.asc' } },
   { desc: 'route param by id', nestjsx: { fields: 'id,name' }, postgrest: { select: 'id,name' }, params: { id: 1 } },
 ];
 

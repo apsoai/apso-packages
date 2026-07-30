@@ -86,12 +86,20 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     this.applyWhere(queryBuilder, req, aliases);
     this.applySort(queryBuilder, req, aliases);
 
+    const isPostgrest = req.parsed.dialect === 'postgrest';
     const paginated = this.decidePagination(req);
 
-    if (!paginated) {
+    // PostgREST always returns a bare JSON array (200), regardless of
+    // limit/offset — it never wraps rows in the nestjsx {data,count,...}
+    // envelope. So the postgrest path takes the bare-array branch even when
+    // offset is present; limit/offset just window the array. This is gated on
+    // the dialect, so nestjsx pagination is untouched (#58).
+    if (!paginated || isPostgrest) {
       // Not paginated: bare array, no COUNT round-trip (nestjsx behavior).
       // A requested limit still applies to the bare array.
-      if (req.query?.limit !== undefined || this.options.query?.limit) {
+      if (isPostgrest) {
+        this.applyPagination(queryBuilder, req, aliases.size > 0);
+      } else if (req.query?.limit !== undefined || this.options.query?.limit) {
         const maxLimit = this.options.query?.maxLimit || 100;
         const actualLimit = Math.min(
           req.parsed.limit || this.options.query?.limit || 20,
@@ -100,7 +108,8 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
         if (aliases.size > 0) queryBuilder.take(actualLimit);
         else queryBuilder.limit(actualLimit);
       }
-      return queryBuilder.getMany();
+      const rows = await this.execute(queryBuilder, isPostgrest);
+      return isPostgrest ? this.applyFieldAliases(rows, req) : rows;
     }
 
     this.applyPagination(queryBuilder, req, aliases.size > 0);
@@ -137,6 +146,61 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     // not (it just caps the bare array).
     const q = req.query || {};
     return q.page !== undefined || q.offset !== undefined;
+  }
+
+  /**
+   * Run getMany's query. In the PostgREST path an unknown filter/select column
+   * surfaces as Postgres error 42703 (undefined_column); PostgREST answers that
+   * with a 400, not a 500. Catch it here and rethrow as a BadRequestException.
+   * The nestjsx path never reaches unknown columns (it silently drops them,
+   * #42), so this is dialect-scoped and does not change nestjsx behavior (#60).
+   */
+  protected async execute(
+    queryBuilder: SelectQueryBuilder<T>,
+    isPostgrest: boolean,
+  ): Promise<T[]> {
+    if (!isPostgrest) return queryBuilder.getMany();
+    try {
+      return await queryBuilder.getMany();
+    } catch (e: any) {
+      // TypeORM wraps the driver error; the pg code lives on the error or its
+      // .driverError. 42703 = undefined_column.
+      const code = e?.code ?? e?.driverError?.code;
+      if (code === '42703') {
+        throw new BadRequestException(
+          this.undefinedColumnMessage(e) ?? 'Unknown column in query',
+        );
+      }
+      throw e;
+    }
+  }
+
+  /** Extract the offending column from a 42703 error for a helpful 400 body. */
+  protected undefinedColumnMessage(e: any): string | undefined {
+    const raw: string | undefined = e?.driverError?.message ?? e?.message;
+    if (!raw) return undefined;
+    // Postgres: `column "foo" does not exist`
+    const m = /column "?([\w.]+)"? does not exist/i.exec(raw);
+    return m ? `Unknown column '${m[1]}' in query` : raw;
+  }
+
+  /**
+   * PostgREST `select=alias:column` renames the OUTPUT key. The parser records
+   * {column: alias} in parsed.fieldAliases; rename each root row's key from
+   * `column` to `alias`, preserving key order. Root-level only (matching
+   * PostgREST, which renames the projected column) — #57.
+   */
+  protected applyFieldAliases(rows: T[], req: ParsedRequest): T[] {
+    const aliases = req.parsed.fieldAliases;
+    if (!aliases || Object.keys(aliases).length === 0) return rows;
+    return rows.map(row => {
+      if (!row || typeof row !== 'object') return row;
+      const out: Record<string, any> = {};
+      for (const [key, value] of Object.entries(row as Record<string, any>)) {
+        out[aliases[key] ?? key] = value;
+      }
+      return out as T;
+    });
   }
 
   async getOne(req: ParsedRequest): Promise<GetOneResponse<T>> {
@@ -481,29 +545,41 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
         select = [...allowedSelect];
       }
 
-      if (select && select.length > 0) {
-        // Explicit column selection: plain join + selected columns (+ PK)
-        if (required) queryBuilder.innerJoin(relation, alias);
-        else queryBuilder.leftJoin(relation, alias);
-
-        const pks = this.primaryKeysOf(path);
-        const cols = [...new Set([...pks, ...select])].map(f => `${alias}.${f}`);
-        queryBuilder.addSelect(cols);
-      } else {
-        if (required) queryBuilder.innerJoinAndSelect(relation, alias);
-        else queryBuilder.leftJoinAndSelect(relation, alias);
-      }
-
-      // Join ON extra conditions (ANDed into WHERE, matching prior behavior)
+      // PostgREST embedded (default/`!left`) filters shape ONLY the embedded
+      // rows: the predicate must live in the JOIN ON clause, not the WHERE, so
+      // every parent still returns (non-matching ones with an empty array).
+      // A WHERE predicate would drop those parents (the `!inner` behavior). The
+      // nestjsx parser never sets join.on, so this branch is postgrest-only and
+      // cannot alter nestjsx queries. See #59.
+      let onClause: string | undefined;
+      let onParams: Record<string, any> | undefined;
       if (join.on && join.on.length > 0) {
         const counter = { n: 1000 + aliases.size * 100 };
+        const clauses: string[] = [];
+        const merged: Record<string, any> = {};
         join.on.forEach(condition => {
           const col = condition.field.includes('.')
             ? condition.field
             : `${alias}.${condition.field}`;
           const { clause, params } = this.buildCondition(col, condition.operator, condition.value, counter);
-          queryBuilder.andWhere(clause, params);
+          clauses.push(clause);
+          Object.assign(merged, params);
         });
+        onClause = clauses.join(' AND ');
+        onParams = merged;
+      }
+
+      if (select && select.length > 0) {
+        // Explicit column selection: plain join + selected columns (+ PK)
+        if (required) queryBuilder.innerJoin(relation, alias, onClause, onParams);
+        else queryBuilder.leftJoin(relation, alias, onClause, onParams);
+
+        const pks = this.primaryKeysOf(path);
+        const cols = [...new Set([...pks, ...select])].map(f => `${alias}.${f}`);
+        queryBuilder.addSelect(cols);
+      } else {
+        if (required) queryBuilder.innerJoinAndSelect(relation, alias, onClause, onParams);
+        else queryBuilder.leftJoinAndSelect(relation, alias, onClause, onParams);
       }
     }
 

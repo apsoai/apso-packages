@@ -254,10 +254,11 @@ describe('TypeOrmCrudService', () => {
 
       await service.getMany(parsedRequest);
 
-      // No select list: join-and-select everything
-      expect(mockQueryBuilder.leftJoinAndSelect).toHaveBeenCalledWith('entity.facilities', 'facilities');
+      // No select list: join-and-select everything. The trailing undefineds
+      // are the (optional) ON clause + params, absent for a plain join (#59).
+      expect(mockQueryBuilder.leftJoinAndSelect).toHaveBeenCalledWith('entity.facilities', 'facilities', undefined, undefined);
       // Explicit select list: plain join + selected columns incl. the PK
-      expect(mockQueryBuilder.leftJoin).toHaveBeenCalledWith('entity.customer', 'cust');
+      expect(mockQueryBuilder.leftJoin).toHaveBeenCalledWith('entity.customer', 'cust', undefined, undefined);
       expect(mockQueryBuilder.addSelect).toHaveBeenCalledWith(['cust.id', 'cust.name']);
     });
 
@@ -286,6 +287,69 @@ describe('TypeOrmCrudService', () => {
 
       // Should be limited to maxLimit (100)
       expect(mockQueryBuilder.limit).toHaveBeenCalledWith(100);
+    });
+  });
+
+  describe('getMany PostgREST dialect (#57/#58/#60)', () => {
+    const pgRequest = (over: Partial<ParsedRequest['parsed']> = {}, query: any = {}): ParsedRequest => ({
+      query,
+      options: {},
+      parsed: {
+        fields: [], paramsFilter: [], search: {}, filter: [], or: [], join: [],
+        sort: [], limit: 20, offset: 0, page: 1, cache: 0,
+        dialect: 'postgrest', ...over,
+      },
+    });
+
+    it('#58 returns a bare array (never the {data,count} envelope), even with offset', async () => {
+      const rows = [{ id: 3 }, { id: 4 }];
+      (mockQueryBuilder.getMany as jest.Mock).mockResolvedValue(rows);
+      // offset present would trigger the nestjsx envelope in decidePagination;
+      // the postgrest path must ignore that and return the bare array.
+      const res = await service.getMany(pgRequest({ limit: 2, offset: 2 }, { limit: 2, offset: 2 }));
+      expect(Array.isArray(res)).toBe(true);
+      expect(res).toEqual(rows);
+      expect(mockQueryBuilder.getManyAndCount).not.toHaveBeenCalled();
+      // limit/offset still window the array
+      expect(mockQueryBuilder.limit).toHaveBeenCalledWith(2);
+      expect(mockQueryBuilder.offset).toHaveBeenCalledWith(2);
+    });
+
+    it('#57 renames output keys from column to alias (fieldAliases)', async () => {
+      (mockQueryBuilder.getMany as jest.Mock).mockResolvedValue([
+        { id: 1, title: 'A' }, { id: 2, title: 'B' },
+      ]);
+      const res = await service.getMany(pgRequest({ fieldAliases: { title: 'name' } }));
+      expect(res).toEqual([{ id: 1, name: 'A' }, { id: 2, name: 'B' }]);
+    });
+
+    it('#60 maps Postgres 42703 (undefined_column) to a 400', async () => {
+      const err: any = new Error('column "nonexistent" does not exist');
+      err.code = '42703';
+      (mockQueryBuilder.getMany as jest.Mock).mockRejectedValue(err);
+      await expect(service.getMany(pgRequest())).rejects.toMatchObject({ status: 400 });
+    });
+
+    it('#60 rethrows non-42703 errors unchanged', async () => {
+      const err: any = new Error('boom');
+      err.code = '08006';
+      (mockQueryBuilder.getMany as jest.Mock).mockRejectedValue(err);
+      await expect(service.getMany(pgRequest())).rejects.toThrow('boom');
+    });
+
+    it('nestjsx path is unaffected: 42703 is NOT swallowed to a 400', async () => {
+      const err: any = new Error('column "x" does not exist');
+      err.code = '42703';
+      (mockQueryBuilder.getMany as jest.Mock).mockRejectedValue(err);
+      // No dialect marker => nestjsx bare-array path => error propagates raw.
+      const nx: ParsedRequest = {
+        query: {}, options: {},
+        parsed: {
+          fields: [], paramsFilter: [], search: {}, filter: [], or: [], join: [],
+          sort: [], limit: 20, offset: 0, page: 1, cache: 0,
+        },
+      };
+      await expect(service.getMany(nx)).rejects.toMatchObject({ code: '42703' });
     });
   });
 

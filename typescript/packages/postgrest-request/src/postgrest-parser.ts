@@ -75,12 +75,21 @@ export class PostgrestRequestParser {
     params: any = {},
     authContext: { filter?: SearchCondition; or?: SearchCondition; persist?: Record<string, any> } = {},
   ): ParsedRequest {
-    const { fields, join } = this.parseSelect(query.select);
+    const { fields, join, fieldAliases } = this.parseSelect(query.select);
     const sort = this.parseOrder(query.order);
     const { limit, offset } = this.parsePagination(query);
-    const conditions = this.parseFilters(query, params);
-    // ?or=(c1,c2)/?and=(c1,c2) logical groups (PostgREST combinators). Each is
-    // ANDed with the top-level column filters, matching PostgREST semantics.
+    const allConditions = this.parseFilters(query, params);
+
+    // PostgREST embedded filters (`rel.col=op.value`) shape ONLY the embedded
+    // rows: every parent still returns, non-matching ones with an empty array.
+    // That is a LEFT JOIN with the predicate in the JOIN ON clause, not a WHERE
+    // (which would drop parents like !inner). partitionEmbeddedFilters mutates
+    // `join` in place, attaching each embedded filter to its relation's `on`
+    // list, and returns the root-level filters. `!inner` is handled separately (#59).
+    const conditions = this.partitionEmbeddedFilters(allConditions, join);
+
+    // ?or=(c1,c2)/?and=(c1,c2) logical groups (PostgREST combinators, #56). Each
+    // is ANDed with the top-level column filters, matching PostgREST semantics.
     const groups = [
       this.parseLogical(query.or, '$or'),
       this.parseLogical(query.and, '$and'),
@@ -92,6 +101,8 @@ export class PostgrestRequestParser {
       fields,
       paramsFilter: this.parseParams(params),
       authPersist: authContext.persist || undefined,
+      dialect: 'postgrest',
+      fieldAliases: Object.keys(fieldAliases).length > 0 ? fieldAliases : undefined,
       search,
       filter: conditions,
       or: [],
@@ -134,14 +145,15 @@ export class PostgrestRequestParser {
    * join-type hint is stripped (deferred to #54); the allowlist governs
    * access either way.
    */
-  private parseSelect(select: unknown): { fields: string[]; join: JoinCondition[] } {
-    if (typeof select !== 'string' || select.trim() === '') return { fields: [], join: [] };
+  private parseSelect(select: unknown): { fields: string[]; join: JoinCondition[]; fieldAliases: Record<string, string> } {
+    if (typeof select !== 'string' || select.trim() === '') return { fields: [], join: [], fieldAliases: {} };
     return this.parseSelectTree(select, '');
   }
 
-  private parseSelectTree(select: string, prefix: string): { fields: string[]; join: JoinCondition[] } {
+  private parseSelectTree(select: string, prefix: string): { fields: string[]; join: JoinCondition[]; fieldAliases: Record<string, string> } {
     const fields: string[] = [];
     const join: JoinCondition[] = [];
+    const fieldAliases: Record<string, string> = {};
     for (const raw of this.splitTopLevel(select)) {
       const tok = raw.trim();
       if (tok === '') continue;
@@ -154,22 +166,76 @@ export class PostgrestRequestParser {
         const col = parts[parts.length - 1].trim();
         if (col === '*' || col === '') continue; // `*` = all columns → no explicit field
         fields.push(col);
+        // `alias:column` renames the OUTPUT key: PostgREST returns the row
+        // keyed by `alias`, not `column`. Record it (root-level only — the
+        // engine renames root keys) so the engine emits `column AS alias` (#57).
+        if (parts.length > 1) {
+          const alias = parts[0].trim();
+          if (alias && alias !== col && prefix === '') fieldAliases[col] = alias;
+        }
       } else {
         // embed: `[alias:]relation[!hint](innerSelect)`
         const head = tok.slice(0, open);
         const inner = tok.slice(open + 1, tok.lastIndexOf(')'));
-        let rel = head.includes(':') ? head.split(':').pop()! : head;
-        rel = rel.split('!')[0].trim(); // drop the !inner/!left hint
+        let relPart = head.includes(':') ? head.split(':').pop()! : head;
+        // `!inner` makes an embedded filter a PARENT-level filter (drops
+        // non-matching parents); `!left` (or no hint) is the default and keeps
+        // all parents. Capture it so partitionEmbeddedFilters routes the filter
+        // to WHERE (inner) vs the JOIN ON (default). See #59.
+        const hint = relPart.includes('!') ? relPart.split('!')[1]?.trim().toLowerCase() : undefined;
+        const rel = relPart.split('!')[0].trim();
         if (!rel) throw new RequestQueryException(`Invalid embed in select: ${tok}`);
         const path = prefix ? `${prefix}.${rel}` : rel;
         const sub = this.parseSelectTree(inner, path);
         // `rel(*)` / `rel()` → no explicit select → full leftJoinAndSelect,
         // matching a nestjsx join with no column list.
-        join.push(sub.fields.length > 0 ? { field: path, select: sub.fields } : { field: path });
+        const cond: JoinCondition & { embedInner?: boolean } =
+          sub.fields.length > 0 ? { field: path, select: sub.fields } : { field: path };
+        if (hint === 'inner') cond.embedInner = true;
+        join.push(cond);
         join.push(...sub.join);
       }
     }
-    return { fields, join };
+    return { fields, join, fieldAliases };
+  }
+
+  /**
+   * PostgREST embedded filters (#59). A filter `rel.col=op.value` (or a deeper
+   * `rel.sub.col`) whose prefix matches a joined embed shapes ONLY that embed's
+   * rows: all parents still return, non-matching ones with empty arrays. That
+   * is a LEFT JOIN with the predicate in the JOIN ON clause. This moves such a
+   * filter onto the join's `on` list (which the engine emits into the ON) and
+   * returns the remaining root-level filters for the WHERE clause.
+   *
+   * Exception: an embed marked `!inner` is a PARENT-level filter — its
+   * predicate belongs in the WHERE (drops non-matching parents), so it stays in
+   * the root conditions. That keeps `pg-embed-inner` behavior intact.
+   */
+  private partitionEmbeddedFilters(
+    conditions: FilterCondition[],
+    join: JoinCondition[],
+  ): FilterCondition[] {
+    if (join.length === 0) return conditions;
+    const byPath = new Map<string, JoinCondition & { embedInner?: boolean }>();
+    for (const j of join) byPath.set(j.field, j as any);
+
+    const root: FilterCondition[] = [];
+    for (const c of conditions) {
+      const dot = c.field.lastIndexOf('.');
+      const prefix = dot === -1 ? '' : c.field.slice(0, dot);
+      const target = prefix ? byPath.get(prefix) : undefined;
+      if (target && !target.embedInner) {
+        // Embedded (default/`!left`) filter: predicate goes in the JOIN ON so
+        // parents are preserved. Store just the column name; the engine
+        // qualifies it with the join alias.
+        const col = c.field.slice(dot + 1);
+        (target.on ??= []).push({ field: col, operator: c.operator, value: c.value });
+      } else {
+        // Root filter, or `!inner` embed filter (parent-level → WHERE).
+        root.push(c);
+      }
+    }
+    return root;
   }
 
   /** Split on commas that are NOT inside parentheses (for nested embeds). */
