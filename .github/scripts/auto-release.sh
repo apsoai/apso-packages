@@ -59,7 +59,10 @@ set_state() { echo "$1=$2" >>"$GITHUB_ENV"; }
 # --- per-package publish (return non-zero on failure) ---------------------------
 do_ts() { # <version> <path> <npm-name> <id>
   local v="$1" path="$2" name="$3" id="$4"
-  ( cd typescript && npm ci && npm run build -w "$name" && npm test -w "$name" ) || return 1
+  # Deps are built once, in dependency order, by prebuild_ts() before the loop —
+  # so a package that depends on a *skipped* (unchanged) package still resolves
+  # its types. Here we only re-verify this package and publish it.
+  ( cd typescript && npm test -w "$name" ) || return 1
   ( cd "$path" && npm version "$v" --no-git-tag-version --allow-same-version ) || return 1
   if npm view "$name@$v" version >/dev/null 2>&1; then
     echo "[$id] $name@$v already on npm — skip publish"
@@ -90,8 +93,25 @@ do_go() { # validate; resolves deps + writes go.sum (committed in finalize)
       && go mod tidy && go build ./... && go test ./... ) || return 1
 }
 
+# Build every TS package once, in dependency order, so each package's dist/
+# (and thus its published types) exists before any dependent builds or publishes.
+# The root `workspaces` array is NOT dependency-ordered, so `--workspaces` would
+# build `crud` before `crud-core`; we build explicitly in the PKGS order instead.
+# Without this, a changed package (e.g. crud) failed to resolve an unchanged,
+# therefore-unbuilt dependency (crud-core) with TS2307 and aborted the release.
+prebuild_ts() {
+  ( cd typescript && npm ci ) || return 1
+  local entry ID PATH_ PREFIX TYPE NPM_NAME
+  for entry in "${PKGS[@]}"; do
+    IFS='|' read -r ID PATH_ PREFIX TYPE NPM_NAME <<<"$entry"
+    [ "$TYPE" = npm ] || continue
+    ( cd typescript && npm run build -w "$NPM_NAME" ) || { echo "prebuild $NPM_NAME failed"; return 1; }
+  done
+}
+
 prepare() {
   local failed=0
+  prebuild_ts || { echo "::error::TS prebuild failed — aborting release"; set_state RELEASE_FAILED 1; exit 1; }
   for entry in "${PKGS[@]}"; do
     IFS='|' read -r ID PATH_ PREFIX TYPE NPM_NAME <<<"$entry"
     local tag; tag=$(last_tag "$PREFIX")
