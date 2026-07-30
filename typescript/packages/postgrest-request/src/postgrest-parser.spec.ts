@@ -179,6 +179,44 @@ describe('PostgrestRequestParser', () => {
     });
   });
 
+  describe('or= / and= combinators (#56)', () => {
+    const search = (q: any) => p.parse(q).parsed.search;
+    it('parses or=(c1,c2) into a $or of the conditions', () => {
+      expect(search({ or: '(views.eq.100,views.eq.999)' })).toEqual({
+        $or: [{ views: { $eq: 100 } }, { views: { $eq: 999 } }],
+      });
+    });
+    it('ANDs an or= group with top-level column filters', () => {
+      expect(search({ status: 'eq.active', or: '(views.eq.100,views.eq.999)' })).toEqual({
+        $and: [
+          { status: { $eq: 'active' } },
+          { $or: [{ views: { $eq: 100 } }, { views: { $eq: 999 } }] },
+        ],
+      });
+    });
+    it('supports not.<op> and mixed operators inside the group', () => {
+      expect(search({ or: '(views.gt.100,title.not.eq.hidden)' })).toEqual({
+        $or: [{ views: { $gt: 100 } }, { title: { $ne: 'hidden' } }],
+      });
+    });
+    it('parses and=(...) into a $and group', () => {
+      expect(search({ and: '(views.gte.10,views.lt.100)' })).toEqual({
+        $and: [{ views: { $gte: 10 } }, { views: { $lt: 100 } }],
+      });
+    });
+    it('supports a nested and(...) inside or=(...)', () => {
+      expect(search({ or: '(views.eq.1,and(views.gt.10,views.lt.20))' })).toEqual({
+        $or: [
+          { views: { $eq: 1 } },
+          { $and: [{ views: { $gt: 10 } }, { views: { $lt: 20 } }] },
+        ],
+      });
+    });
+    it('400s a malformed group (missing parens)', () => {
+      expect(() => p.parse({ or: 'views.eq.1' })).toThrow('expected or=(cond,cond,...)');
+    });
+  });
+
   describe('errors', () => {
     it('400s a filter with no op.value', () => {
       expect(() => p.parse({ age: '30' })).toThrow('expected op.value');
