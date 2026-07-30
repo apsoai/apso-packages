@@ -1,6 +1,6 @@
 {
   "name": "@apso/postgrest-request",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Client-safe PostgREST URL query parser for @apso/crud (dual-dialect). Emits the same parsed-request representation as @apso/crud-request.",
   "license": "Apache-2.0",
   "main": "dist/index.js",
