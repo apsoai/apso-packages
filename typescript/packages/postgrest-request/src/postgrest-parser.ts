@@ -79,8 +79,14 @@ export class PostgrestRequestParser {
     const sort = this.parseOrder(query.order);
     const { limit, offset } = this.parsePagination(query);
     const conditions = this.parseFilters(query, params);
+    // ?or=(c1,c2)/?and=(c1,c2) logical groups (PostgREST combinators). Each is
+    // ANDed with the top-level column filters, matching PostgREST semantics.
+    const groups = [
+      this.parseLogical(query.or, '$or'),
+      this.parseLogical(query.and, '$and'),
+    ].filter((g): g is SearchCondition => g !== null);
 
-    const search = this.buildSearchTree(conditions, authContext);
+    const search = this.buildSearchTree(conditions, authContext, groups);
 
     const parsed: ParsedRequestParams = {
       fields,
@@ -307,6 +313,41 @@ export class PostgrestRequestParser {
     return { field, operator: mapped, value: this.coerce(rest) };
   }
 
+  /**
+   * ?or=(c1.op.v1,c2.op.v2) / ?and=(...) — PostgREST logical combinators.
+   * Each condition is `col.op.value` (or `col.not.op.value`); nested groups
+   * `or(...)`/`and(...)` are supported recursively. Returns a `$or`/`$and`
+   * SearchCondition, or null when the param is absent.
+   */
+  private parseLogical(raw: unknown, key: '$or' | '$and'): SearchCondition | null {
+    if (raw === undefined || raw === null) return null;
+    const val = Array.isArray(raw) ? String(raw[0]) : String(raw);
+    return this.parseLogicalGroup(val, key);
+  }
+
+  private parseLogicalGroup(raw: string, key: '$or' | '$and'): SearchCondition {
+    const label = key === '$or' ? 'or' : 'and';
+    const trimmed = raw.trim();
+    if (!(trimmed.startsWith('(') && trimmed.endsWith(')'))) {
+      throw new RequestQueryException(`Invalid ${label}= group: expected ${label}=(cond,cond,...)`);
+    }
+    const parts = this.splitTopLevel(trimmed.slice(1, -1)).map(s => s.trim()).filter(Boolean);
+    if (parts.length === 0) {
+      throw new RequestQueryException(`Empty ${label}= group`);
+    }
+    const branches: SearchCondition[] = parts.map(part => {
+      if (part.startsWith('or(')) return this.parseLogicalGroup(part.slice(2), '$or');
+      if (part.startsWith('and(')) return this.parseLogicalGroup(part.slice(3), '$and');
+      const dot = part.indexOf('.');
+      if (dot === -1) {
+        throw new RequestQueryException(`Invalid condition in ${label}= group: ${part}`);
+      }
+      const c = this.parseCondition(part.slice(0, dot), part.slice(dot + 1));
+      return { [c.field]: { [c.operator]: c.value } } as SearchCondition;
+    });
+    return { [key]: branches } as SearchCondition;
+  }
+
   /** in.(1,2,3) or in.("a,b",c) */
   private parseInList(rest: string): any[] {
     let inner = rest.trim();
@@ -362,14 +403,15 @@ export class PostgrestRequestParser {
   private buildSearchTree(
     conditions: FilterCondition[],
     authContext: { filter?: SearchCondition; or?: SearchCondition },
+    groups: SearchCondition[] = [],
   ): SearchCondition {
     const and: SearchCondition[] = conditions.map(c => ({ [c.field]: { [c.operator]: c.value } }));
-    const paramsAnd: SearchCondition[] = [];
+    // Logical combinators (?or=/?and=) are ANDed alongside the column filters.
+    for (const g of groups) and.push(g);
     if (authContext.or) {
       return and.length > 0 ? { $or: [authContext.or, { $and: and }] } : { $or: [authContext.or] };
     }
     if (authContext.filter) and.unshift(authContext.filter);
-    void paramsAnd;
     if (and.length === 0) return {};
     if (and.length === 1) return and[0];
     return { $and: and };
