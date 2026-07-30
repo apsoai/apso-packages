@@ -1,6 +1,6 @@
 {
   "name": "@apso/crud",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Complete CRUD framework for NestJS with decorators and controllers",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
