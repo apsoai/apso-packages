@@ -88,6 +88,20 @@ export interface ParsedRequestParams {
   offset: number;
   page: number;
   cache: number;
+  /**
+   * Which parser produced this request. Only the PostgREST parser sets it;
+   * the nestjsx parser leaves it undefined. The engine reads it to apply
+   * PostgREST-specific response semantics (bare-array pagination, embedded
+   * filters that keep parents, `select=alias:col` renaming, 42703 -> 400)
+   * without ever changing nestjsx behavior. See #57-#60.
+   */
+  dialect?: 'nestjsx' | 'postgrest';
+  /**
+   * PostgREST `select=alias:column` renames, keyed by the real column name.
+   * The engine renames the corresponding output key from `column` to `alias`
+   * on the root row. Only the PostgREST parser sets this (#57).
+   */
+  fieldAliases?: Record<string, string>;
 }
 
 export interface ParsedRequest {
