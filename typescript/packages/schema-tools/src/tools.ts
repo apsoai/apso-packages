@@ -188,20 +188,21 @@ function outline(schema: Schema): string {
 // Input schemas
 // ---------------------------------------------------------------------------
 
-const str = (description: string): JsonSchema => ({ type: "string", description });
-const bool = (description: string): JsonSchema => ({ type: "boolean", description });
+// Descriptions only where a name is not self-explanatory: every word is resent to the model on each step.
+const str = (description?: string): JsonSchema => ({ type: "string", ...(description ? { description } : {}) });
+const bool = (description?: string): JsonSchema => ({ type: "boolean", ...(description ? { description } : {}) });
 
 const fieldSettings: Record<string, JsonSchema> = {
-  type: str("Field type, e.g. text, integer, decimal, boolean, date, timestamptz, enum, json, uuid."),
-  nullable: bool("True when the value is optional."),
-  unique: bool("True for a unique column."),
-  index: bool("True to index the column."),
-  values: { type: "array", items: { type: "string" }, description: "Allowed values for an enum field." },
-  default: { type: ["string", "number", "boolean", "null"], description: "Default value." },
-  length: { type: "integer", description: "Max length for text/varchar." },
-  precision: { type: "integer", description: "Total digits for decimal/numeric." },
-  scale: { type: "integer", description: "Digits after the point for decimal/numeric." },
-  is_email: bool("True for an email address column."),
+  type: str("text, integer, bigint, decimal, boolean, date, timestamptz, enum, json, uuid"),
+  nullable: bool(),
+  unique: bool(),
+  index: bool(),
+  values: { type: "array", items: { type: "string" }, description: "enum values" },
+  default: { type: ["string", "number", "boolean", "null"] },
+  length: { type: "integer" },
+  precision: { type: "integer" },
+  scale: { type: "integer" },
+  is_email: bool(),
 };
 
 /** update_field accepts null on any setting to remove it. */
@@ -214,21 +215,21 @@ const removableSettings: Record<string, JsonSchema> = Object.fromEntries(
 
 const fieldInput: JsonSchema = {
   type: "object",
-  properties: { name: str("Field name in camelCase or snake_case."), ...fieldSettings },
+  properties: { name: str(), ...fieldSettings },
   required: ["name", "type"],
   additionalProperties: false,
 };
 
 const relationshipProps: Record<string, JsonSchema> = {
-  from: str("Entity the relationship is declared on."),
-  to: str("Entity it points to."),
-  type: { type: "string", enum: RELATIONSHIP_TYPES, description: "Cardinality from `from` to `to`." },
-  to_name: str("Optional property name for the `to` side, used when two relationships point at the same entity."),
-  nullable: bool("True when the relationship is optional."),
-  bi_directional: bool("Generate the inverse property on `to` (ManyToMany and OneToOne)."),
-  cascadeDelete: bool("Delete children with the parent."),
-  index: bool("Index the foreign key column."),
-  joinTableName: str("Join table name for ManyToMany."),
+  from: str(),
+  to: str(),
+  type: { type: "string", enum: RELATIONSHIP_TYPES },
+  to_name: str("property name on `from` when two relationships target the same entity"),
+  nullable: bool(),
+  bi_directional: bool(),
+  cascadeDelete: bool(),
+  index: bool(),
+  joinTableName: str(),
 };
 
 const obj = (properties: Record<string, JsonSchema>, required: string[]): JsonSchema & { type: "object" } => ({
@@ -248,7 +249,7 @@ export const schemaTools: SchemaTool[] = [
     description:
       "Read the whole schema. format \"outline\" (default) gives one line per entity and relationship; \"json\" gives the full .apsorc JSON.",
     readOnly: true,
-    inputSchema: obj({ format: { type: "string", enum: ["outline", "json"], description: "outline or json." } }, []),
+    inputSchema: obj({ format: { type: "string", enum: ["outline", "json"] } }, []),
     run: (schema, input: { format?: string }) =>
       read(schema, "Schema read.", input.format === "json" ? schema : outline(schema)),
   },
@@ -256,7 +257,7 @@ export const schemaTools: SchemaTool[] = [
     name: "describe_entity",
     description: "Read one entity: its fields, indexes, uniques and every relationship that touches it.",
     readOnly: true,
-    inputSchema: obj({ entity: str("Entity name.") }, ["entity"]),
+    inputSchema: obj({ entity: str() }, ["entity"]),
     run: (schema, input: { entity: string }) => {
       const entity = findEntity(schema, input.entity);
       if (!entity) return missingEntity(schema, input.entity);
@@ -271,11 +272,11 @@ export const schemaTools: SchemaTool[] = [
     readOnly: false,
     inputSchema: obj(
       {
-        name: str("PascalCase singular entity name, e.g. Invoice."),
-        fields: { type: "array", items: fieldInput, description: "Fields." },
-        created_at: bool("Add a created_at timestamp (default true)."),
-        updated_at: bool("Add an updated_at timestamp (default true)."),
-        table: str("Explicit table name. Usually omitted."),
+        name: str("PascalCase singular"),
+        fields: { type: "array", items: fieldInput },
+        created_at: bool("default true"),
+        updated_at: bool("default true"),
+        table: str("explicit table name, usually omitted"),
       },
       ["name"]
     ),
@@ -302,7 +303,7 @@ export const schemaTools: SchemaTool[] = [
     name: "rename_entity",
     description: "Rename an entity. Relationships and foreign key indexes that refer to it are updated.",
     readOnly: false,
-    inputSchema: obj({ entity: str("Current entity name."), newName: str("New PascalCase name.") }, ["entity", "newName"]),
+    inputSchema: obj({ entity: str(), newName: str() }, ["entity", "newName"]),
     run: (schema, input: { entity: string; newName: string }) => {
       const current = findEntity(schema, input.entity);
       if (!current) return missingEntity(schema, input.entity);
@@ -330,7 +331,7 @@ export const schemaTools: SchemaTool[] = [
     name: "remove_entity",
     description: "Remove an entity and every relationship that touches it.",
     readOnly: false,
-    inputSchema: obj({ entity: str("Entity name.") }, ["entity"]),
+    inputSchema: obj({ entity: str() }, ["entity"]),
     run: (schema, input: { entity: string }) => {
       const current = findEntity(schema, input.entity);
       if (!current) return missingEntity(schema, input.entity);
@@ -353,7 +354,7 @@ export const schemaTools: SchemaTool[] = [
     description:
       "Add a field to an entity. Use decimal (not float) for money, enum with values for a status or state, and a relationship (not a field) to link entities.",
     readOnly: false,
-    inputSchema: obj({ entity: str("Entity name."), field: fieldInput }, ["entity", "field"]),
+    inputSchema: obj({ entity: str(), field: fieldInput }, ["entity", "field"]),
     run: (schema, input: { entity: string; field: Record<string, unknown> }) => {
       const current = findEntity(schema, input.entity);
       if (!current) return missingEntity(schema, input.entity);
@@ -373,9 +374,9 @@ export const schemaTools: SchemaTool[] = [
     readOnly: false,
     inputSchema: obj(
       {
-        entity: str("Entity name."),
-        field: str("Field name."),
-        changes: { type: "object", properties: removableSettings, additionalProperties: false, description: "Settings to change." },
+        entity: str(),
+        field: str(),
+        changes: { type: "object", properties: removableSettings, additionalProperties: false },
       },
       ["entity", "field", "changes"]
     ),
@@ -394,7 +395,7 @@ export const schemaTools: SchemaTool[] = [
     name: "rename_field",
     description: "Rename a field. Indexes and uniques on it are updated.",
     readOnly: false,
-    inputSchema: obj({ entity: str("Entity name."), field: str("Current field name."), newName: str("New field name.") }, [
+    inputSchema: obj({ entity: str(), field: str(), newName: str() }, [
       "entity",
       "field",
       "newName",
@@ -417,7 +418,7 @@ export const schemaTools: SchemaTool[] = [
     name: "remove_field",
     description: "Remove a field. Indexes and uniques on it are dropped.",
     readOnly: false,
-    inputSchema: obj({ entity: str("Entity name."), field: str("Field name.") }, ["entity", "field"]),
+    inputSchema: obj({ entity: str(), field: str() }, ["entity", "field"]),
     run: (schema, input: { entity: string; field: string }) => {
       const current = findEntity(schema, input.entity);
       if (!current) return missingEntity(schema, input.entity);
@@ -484,9 +485,9 @@ export const schemaTools: SchemaTool[] = [
     readOnly: false,
     inputSchema: obj(
       {
-        entity: str("Entity name."),
-        fields: { type: "array", items: { type: "string" }, description: "Field names, in index order." },
-        unique: bool("True for a unique index."),
+        entity: str(),
+        fields: { type: "array", items: { type: "string" } },
+        unique: bool(),
       },
       ["entity", "fields"]
     ),
