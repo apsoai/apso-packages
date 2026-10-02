@@ -3,6 +3,11 @@
   "version": "1.0.1",
   "description": "Client-safe PostgREST URL query parser for @apso/crud (dual-dialect). Emits the same parsed-request representation as @apso/crud-request.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/apsoai/apso-packages.git",
+    "directory": "typescript/packages/postgrest-request"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [

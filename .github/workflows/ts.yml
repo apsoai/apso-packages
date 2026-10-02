@@ -4,10 +4,12 @@ on:
   push:
     paths:
       - 'typescript/**'
+      - '.github/scripts/**'
       - '.github/workflows/ts.yml'
   pull_request:
     paths:
       - 'typescript/**'
+      - '.github/scripts/**'
       - '.github/workflows/ts.yml'
 
 permissions:
@@ -28,4 +30,7 @@ jobs:
           cache-dependency-path: typescript/package-lock.json
       - run: npm ci
       - run: npm run build
-      - run: npm test
+      - run: npm test # every workspace, including @apso/sdk
+      - name: Release version guard
+        working-directory: .
+        run: bash .github/scripts/test-version-guard.sh

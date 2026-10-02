@@ -23,6 +23,11 @@
     "api"
   ],
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/apsoai/apso-packages.git",
+    "directory": "typescript/packages/crud-typeorm"
+  },
   "dependencies": {
     "@apso/crud-core": "^1.0.0"
   },

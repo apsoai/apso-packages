@@ -11,12 +11,15 @@
 #    A per-package failure sets RELEASE_FAILED=true (a final workflow step fails the job).
 #  - IDEMPOTENT: publishing is skipped when that version already exists (npm view /
 #    PyPI skip-existing / existing tag), so partial runs self-heal on re-run.
+#  - REGISTRY GUARD: never release a version at or below the highest one already on
+#    npm/PyPI (see guard_version). Tags alone are not trusted as the baseline.
+#  - npm publishes via Trusted Publishing (GitHub OIDC), no NPM_TOKEN.
 #  - State passes between phases via $GITHUB_ENV (<PKG>_RELEASE / _VERSION / _PREFIX).
 set -uo pipefail
 
 PHASE="${1:?usage: auto-release.sh prepare|finalize}"
 
-# id | path | tag-prefix | type | npm-name (npm only)
+# id | path | tag-prefix | type | registry name (npm / PyPI)
 # npm entries are ordered by dependency: crud-core before crud-request and
 # crud-typeorm, which come before crud (matters for a coherent first release).
 PKGS=(
@@ -27,7 +30,7 @@ PKGS=(
   "CRUDTORM|typescript/packages/crud-typeorm|ts-crud-typeorm-v|npm|@apso/crud-typeorm"
   "CRUD|typescript/packages/crud|ts-crud-v|npm|@apso/crud"
   "SDK|typescript/packages/sdk|ts-sdk-v|npm|@apso/sdk"
-  "PY|python/packages/domain-events|py-domain-events-v|pypi|"
+  "PY|python/packages/domain-events|py-domain-events-v|pypi|apso-domain-events"
   "GO|go/domainevents|go/domainevents/v|go|"
 )
 ALL_IDS="TS CRUDCORE CRUDREQ PGREQ CRUDTORM CRUD SDK PY GO"
@@ -56,6 +59,66 @@ manifest_version() {
 }
 set_state() { echo "$1=$2" >>"$GITHUB_ENV"; }
 
+# Highest stable version on the registry ("" when the package was never published).
+# Fails (non-zero) when the registry can't be read, so the guard never passes blind.
+# REGISTRY_VERSIONS (newline-separated) replaces the lookup, for tests.
+registry_max() { # <type> <name>
+  local out code
+  if [ -n "${REGISTRY_VERSIONS+x}" ]; then out="$REGISTRY_VERSIONS"
+  else
+    case "$1" in
+      npm)
+        if ! out=$(npm view "$2" versions --json 2>&1); then
+          grep -q E404 <<<"$out" || return 1; out=""
+        else
+          out=$(node -e 'const v=JSON.parse(process.argv[1]);console.log([].concat(v).join("\n"))' "$out") || return 1
+        fi;;
+      pypi)
+        out=$(curl -sS -w '\n%{http_code}' "https://pypi.org/pypi/$2/json") || return 1
+        code=$(tail -1 <<<"$out")
+        case "$code" in
+          404) out="";;
+          200) out=$(sed '$d' <<<"$out" | python3 -c 'import sys,json;print("\n".join(json.load(sys.stdin)["releases"]))') || return 1;;
+          *) return 1;;
+        esac;;
+      *) out="";;
+    esac
+  fi
+  grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' <<<"$out" | sort -V | tail -1
+  return 0
+}
+# Was <name>@<version> published from this repo? (self-heal vs. collision with a
+# version published elsewhere, e.g. @apso/sdk 1.3.1 from the old apsoai/sdk repo).
+# REGISTRY_REPO replaces the lookup, for tests.
+published_here() { # <type> <name> <version>
+  [ "$1" = npm ] || return 0 # PyPI project has only ever been published from here
+  local url="${REGISTRY_REPO-$(npm view "$2@$3" repository.url 2>/dev/null)}"
+  grep -q 'apsoai/apso-packages' <<<"$url"
+}
+# Echo the version to release: <new> if it is above everything on the registry,
+# else re-bump from the registry max (commit-derived bumps), else fail loudly
+# (hand-pinned/initial versions). Equal to the registry max is allowed only when
+# that version came from this repo (a partial earlier run; publish then skips).
+guard_version() { # <type> <name> <new> <level>
+  local type="$1" name="$2" new="$3" level="$4" max
+  [ "$type" = go ] && { echo "$new"; return 0; } # Go: tags ARE the registry
+  max=$(registry_max "$type" "$name") || { echo "::error::[$name] cannot read versions from $type" >&2; return 1; }
+  if [ -z "$max" ] || { [ "$new" != "$max" ] && [ "$(printf '%s\n%s\n' "$max" "$new" | sort -V | tail -1)" = "$new" ]; }; then
+    echo "$new"; return 0
+  fi
+  if [ "$new" = "$max" ] && published_here "$type" "$name" "$new"; then
+    echo "$new"; return 0
+  fi
+  case "$level" in
+    major|minor|patch)
+      echo "[$name] $new is not above registry max $max; releasing from $max instead" >&2
+      bump_semver "$max" "$level";;
+    *)
+      echo "::error::[$name] version $new ($level) is not above registry max $max; bump the manifest" >&2
+      return 1;;
+  esac
+}
+
 # --- per-package publish (return non-zero on failure) ---------------------------
 do_ts() { # <version> <path> <npm-name> <id>
   local v="$1" path="$2" name="$3" id="$4"
@@ -67,7 +130,10 @@ do_ts() { # <version> <path> <npm-name> <id>
   if npm view "$name@$v" version >/dev/null 2>&1; then
     echo "[$id] $name@$v already on npm — skip publish"
   else
-    ( cd "$path" && npm publish --access public ) || return 1
+    # Trusted Publishing (OIDC). Blank NODE_AUTH_TOKEN and an empty userconfig so no
+    # token placeholder from setup-node can shadow OIDC (that produced E404 in apsoai/cli).
+    local npmrc; npmrc=$(mktemp)
+    ( cd "$path" && NODE_AUTH_TOKEN='' NPM_CONFIG_USERCONFIG="$npmrc" npm publish --access public ) || return 1
   fi
 }
 do_py() { # <version>  (build only; the PyPI OIDC action publishes, with skip-existing)
@@ -140,9 +206,13 @@ prepare() {
         else new=$(bump_semver "$mver" "$level"); fi
       fi
     fi
+    local ok=1
+    new=$(guard_version "$TYPE" "$NPM_NAME" "$new" "$level") || ok=0
+    if [ "$ok" = 0 ]; then
+      echo "::error::[$ID] release prep failed"; failed=1; set_state "${ID}_RELEASE" false; continue
+    fi
     echo "[$ID] releasing $new (bump: $level)"
 
-    local ok=1
     case "$TYPE" in
       npm)  do_ts  "$new" "$PATH_" "$NPM_NAME" "$ID" || ok=0;;
       pypi) do_py  "$new" || ok=0;;
@@ -188,6 +258,7 @@ finalize() {
 
 case "$PHASE" in
   prepare) prepare;;
+  guard) shift; guard_version "$@";; # dry run: guard <type> <name> <version> <level>
   finalize) finalize;;
   *) echo "unknown phase: $PHASE" >&2; exit 1;;
 esac

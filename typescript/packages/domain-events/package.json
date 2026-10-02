@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Durable domain-event spine (transactional outbox + runtime-selected delivery) for NestJS + TypeORM.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/apsoai/apso-packages.git",
+    "directory": "typescript/packages/domain-events"
+  },
   "author": "Apso",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
