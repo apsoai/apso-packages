@@ -1,6 +1,6 @@
 {
   "name": "@apso/schema-tools",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Lint, autofix and edit Apso .apsorc schemas: one rule set plus targeted schema operations for the CLI, the platform, the AI schema builder and MCP agents.",
   "license": "Apache-2.0",
   "author": "Apso",
