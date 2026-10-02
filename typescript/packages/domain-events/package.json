@@ -1,6 +1,6 @@
 {
   "name": "@apso/domain-events",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Durable domain-event spine (transactional outbox + runtime-selected delivery) for NestJS + TypeORM.",
   "license": "MIT",
   "repository": {
