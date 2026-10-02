@@ -17,6 +17,7 @@ each package checks whether its directory changed since that package's last rele
 | `@apso/crud-typeorm` | `typescript/packages/crud-typeorm/` | `ts-crud-typeorm-vX.Y.Z` | npm |
 | `@apso/crud` | `typescript/packages/crud/` | `ts-crud-vX.Y.Z` | npm |
 | `@apso/sdk` | `typescript/packages/sdk/` | `ts-sdk-vX.Y.Z` | npm |
+| `@apso/schema-lint` | `typescript/packages/schema-lint/` | `ts-schema-lint-vX.Y.Z` | npm |
 | `apso-domain-events` | `python/packages/domain-events/` | `py-domain-events-vX.Y.Z` | PyPI |
 | `domainevents` (Go) | `go/domainevents/` | `go/domainevents/vX.Y.Z` | Go proxy (tag only) |
 
