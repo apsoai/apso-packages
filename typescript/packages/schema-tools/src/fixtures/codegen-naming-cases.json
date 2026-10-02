@@ -1,0 +1,135 @@
+{
+  "_comment": "Canonical codegen naming cases for @apso/schema-tools (ported from apso-client-v2 tests/fixtures and @apso/cli test/fixtures, which held identical copies). Consumers now call lintSchema instead of keeping their own copy.",
+  "cases": [
+    {
+      "name": "text field named like the inverse OneToMany property (service 4720)",
+      "schema": {
+        "entities": [
+          { "name": "Contact", "fields": [{ "name": "notes", "type": "text" }] },
+          { "name": "Note", "fields": [{ "name": "body", "type": "text" }] }
+        ],
+        "relationships": [{ "from": "Note", "to": "Contact", "type": "ManyToOne" }]
+      },
+      "error": { "code": "FIELD_RELATIONSHIP_COLLISION", "entity": "Contact", "field": "notes" }
+    },
+    {
+      "name": "field named like the ManyToOne property",
+      "schema": {
+        "entities": [
+          { "name": "Contact", "fields": [{ "name": "name", "type": "text" }] },
+          { "name": "Note", "fields": [{ "name": "contact", "type": "integer" }] }
+        ],
+        "relationships": [{ "from": "Note", "to": "Contact", "type": "ManyToOne" }]
+      },
+      "error": { "code": "FIELD_RELATIONSHIP_COLLISION", "entity": "Note", "field": "contact" }
+    },
+    {
+      "name": "field named like the OneToMany property, declared from the one side",
+      "schema": {
+        "entities": [
+          { "name": "Contact", "fields": [{ "name": "notes", "type": "text" }] },
+          { "name": "Note", "fields": [{ "name": "body", "type": "text" }] }
+        ],
+        "relationships": [{ "from": "Contact", "to": "Note", "type": "OneToMany" }]
+      },
+      "error": { "code": "FIELD_RELATIONSHIP_COLLISION", "entity": "Contact", "field": "notes" }
+    },
+    {
+      "name": "field named like a to_name alias",
+      "schema": {
+        "entities": [
+          { "name": "Application", "fields": [{ "name": "owner", "type": "text" }] },
+          { "name": "User", "fields": [{ "name": "email", "type": "text" }] }
+        ],
+        "relationships": [{ "from": "Application", "to": "User", "type": "ManyToOne", "to_name": "owner" }]
+      },
+      "error": { "code": "FIELD_RELATIONSHIP_COLLISION", "entity": "Application", "field": "owner" }
+    },
+    {
+      "name": "two relationships generate the same property",
+      "schema": {
+        "entities": [
+          { "name": "Task", "fields": [{ "name": "title", "type": "text" }] },
+          { "name": "User", "fields": [{ "name": "email", "type": "text" }] },
+          { "name": "Team", "fields": [{ "name": "label", "type": "text" }] }
+        ],
+        "relationships": [
+          { "from": "Task", "to": "User", "type": "ManyToOne", "to_name": "owner" },
+          { "from": "Task", "to": "Team", "type": "ManyToOne", "to_name": "owner" }
+        ]
+      },
+      "error": { "code": "RELATIONSHIP_PROPERTY_CLASH", "entity": "Task", "field": "owner" }
+    },
+    {
+      "name": "duplicate field name",
+      "schema": {
+        "entities": [{ "name": "Contact", "fields": [{ "name": "email", "type": "text" }, { "name": "email", "type": "varchar" }] }],
+        "relationships": []
+      },
+      "error": { "code": "DUPLICATE_FIELD_NAME", "entity": "Contact", "field": "email" }
+    },
+    {
+      "name": "field name that is not an identifier",
+      "schema": {
+        "entities": [{ "name": "Contact", "fields": [{ "name": "first name", "type": "text" }] }],
+        "relationships": []
+      },
+      "error": { "code": "INVALID_FIELD_NAME", "entity": "Contact", "field": "first name" }
+    },
+    {
+      "name": "entity name that is not an identifier",
+      "schema": {
+        "entities": [{ "name": "Line Item", "fields": [{ "name": "quantity", "type": "integer" }] }],
+        "relationships": []
+      },
+      "error": { "code": "INVALID_ENTITY_NAME", "entity": "Line Item" }
+    },
+    {
+      "name": "duplicate entity name",
+      "schema": {
+        "entities": [
+          { "name": "Contact", "fields": [{ "name": "email", "type": "text" }] },
+          { "name": "Contact", "fields": [{ "name": "phone", "type": "text" }] }
+        ],
+        "relationships": []
+      },
+      "error": { "code": "DUPLICATE_ENTITY_NAME", "entity": "Contact" }
+    },
+    {
+      "name": "renamed field passes",
+      "schema": {
+        "entities": [
+          { "name": "Contact", "fields": [{ "name": "notes_text", "type": "text" }] },
+          { "name": "Note", "fields": [{ "name": "body", "type": "text" }] }
+        ],
+        "relationships": [{ "from": "Note", "to": "Contact", "type": "ManyToOne" }]
+      },
+      "error": null
+    },
+    {
+      "name": "same relationship declared from both sides passes",
+      "schema": {
+        "entities": [
+          { "name": "Contact", "fields": [{ "name": "name", "type": "text" }] },
+          { "name": "Note", "fields": [{ "name": "body", "type": "text" }] }
+        ],
+        "relationships": [
+          { "from": "Note", "to": "Contact", "type": "ManyToOne" },
+          { "from": "Contact", "to": "Note", "type": "OneToMany" }
+        ]
+      },
+      "error": null
+    },
+    {
+      "name": "unidirectional ManyToOne generates no inverse property",
+      "schema": {
+        "entities": [
+          { "name": "Contact", "fields": [{ "name": "notes", "type": "text" }] },
+          { "name": "Note", "fields": [{ "name": "body", "type": "text" }] }
+        ],
+        "relationships": [{ "from": "Note", "to": "Contact", "type": "ManyToOne", "bi_directional": false }]
+      },
+      "error": null
+    }
+  ]
+}

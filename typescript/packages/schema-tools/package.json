@@ -1,0 +1,37 @@
+{
+  "name": "@apso/schema-tools",
+  "version": "0.1.0",
+  "description": "Lint, autofix and edit Apso .apsorc schemas: one rule set plus targeted schema operations for the CLI, the platform, the AI schema builder and MCP agents.",
+  "license": "Apache-2.0",
+  "author": "Apso",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "test": "jest",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "pluralize": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/pluralize": "^0.0.33"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/apsoai/apso-packages.git",
+    "directory": "typescript/packages/schema-tools"
+  },
+  "keywords": [
+    "apso",
+    "apsorc",
+    "schema",
+    "lint",
+    "mcp",
+    "ai-tools"
+  ]
+}

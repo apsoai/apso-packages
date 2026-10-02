@@ -20,5 +20,6 @@ apso-packages/
 | Feature | TypeScript | Python | Go |
 |---|---|---|---|
 | **domain-events** (transactional outbox + delivery) | `@apso/domain-events` | `apso-domain-events` | `.../go/domainevents` |
+| **schema-tools** (.apsorc lint, autofix and edit operations for AI agents) | `@apso/schema-tools` | n/a | n/a |
 
 See [`CONTRACT.md`](CONTRACT.md) for the behavior every language implementation must honor.
