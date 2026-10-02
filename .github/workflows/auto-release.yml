@@ -24,16 +24,20 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # commit version bumps, push tags, create releases
-      id-token: write # PyPI Trusted Publishing (OIDC)
+      id-token: write # npm + PyPI Trusted Publishing (OIDC)
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # full history + tags for change detection
 
+      # No registry-url: setup-node would write an .npmrc with a NODE_AUTH_TOKEN
+      # placeholder that shadows OIDC and fails publish with E404.
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          registry-url: "https://registry.npmjs.org"
+          node-version: "22"
+
+      # npm Trusted Publishing needs npm >= 11.5.1 (Node 22 ships npm 10).
+      - run: npm install -g npm@^11.5.1 && npm --version
 
       - uses: actions/setup-python@v5
         with:
@@ -43,12 +47,12 @@ jobs:
         with:
           go-version: "1.21"
 
-      # Detect → bump → build/test → publish npm + build PyPI dist. Sets
-      # <PKG>_RELEASE / <PKG>_VERSION in the job env for later steps.
+      # Detect → bump → registry guard → build/test → publish npm (Trusted
+      # Publishing, no token) + build PyPI dist. Sets <PKG>_RELEASE /
+      # <PKG>_VERSION in the job env for later steps.
       - name: Prepare + publish (npm/go-build)
         run: bash .github/scripts/auto-release.sh prepare
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }} # org-level automation token (@apso scope)
           GH_TOKEN: ${{ github.token }}
 
       # PyPI publish via OIDC (only when the Python package was bumped). Trusted

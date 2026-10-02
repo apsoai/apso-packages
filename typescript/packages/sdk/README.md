@@ -54,6 +54,32 @@ const response = await client.get('/WorkspaceServices', {
 
 // This will generate a standards-compliant query string for NestJS CRUD APIs.
 
+## Supabase-style queries (PostgREST dialect)
+
+`createClient(config).from(table)` mirrors the `@supabase/supabase-js` query builder.
+It sends the Apso PostgREST dialect (`X-Crud-Dialect: postgrest`) and resolves to
+`{ data, error, count, status, statusText }`. It never throws: HTTP, network, and
+timeout failures come back on `error`.
+
+```typescript
+import { createClient } from '@apso/sdk';
+
+const apso = createClient({ baseURL: 'https://api.example.com', apiKey: 'key' });
+
+const { data, error } = await apso
+  .from('posts')
+  .select('id,title')
+  .eq('published', true)
+  .order('created_at', { ascending: false })
+  .range(0, 9);
+```
+
+Reads use `select(columns, { count: 'exact' })`; writes use `insert`, `update`, `delete`.
+Filters: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `is`, `in`, `not`,
+`filter`, `match`, `or`. Modifiers: `order`, `limit`, `range`, `single`, `maybeSingle`.
+`contains`, `containedBy`, `overlaps`, `textSearch`, and `upsert` are not in the Apso
+dialect and throw a descriptive error.
+
 ## Test Examples
 
 Here are some Jest test examples for the SDK:
