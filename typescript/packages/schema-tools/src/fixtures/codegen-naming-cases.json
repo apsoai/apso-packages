@@ -1,5 +1,5 @@
 {
-  "_comment": "Canonical codegen naming cases for @apso/schema-lint (ported from apso-client-v2 tests/fixtures and @apso/cli test/fixtures, which held identical copies). Consumers now call lintSchema instead of keeping their own copy.",
+  "_comment": "Canonical codegen naming cases for @apso/schema-tools (ported from apso-client-v2 tests/fixtures and @apso/cli test/fixtures, which held identical copies). Consumers now call lintSchema instead of keeping their own copy.",
   "cases": [
     {
       "name": "text field named like the inverse OneToMany property (service 4720)",

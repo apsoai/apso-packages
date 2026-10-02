@@ -1,10 +1,6 @@
 import { rules } from "./rules";
 import { Finding, LintIssue, LintResult, Schema } from "./types";
 
-export * from "./types";
-export { rules } from "./rules";
-export { relationshipProperties } from "./naming";
-
 function findings(schema: Schema): Finding[] {
   if (!schema || typeof schema !== "object") {
     return [

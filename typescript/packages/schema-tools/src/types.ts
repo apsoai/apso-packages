@@ -16,6 +16,9 @@ export interface SchemaField {
   values?: string[];
   default?: unknown;
   length?: number;
+  precision?: number;
+  scale?: number;
+  is_email?: boolean;
 }
 
 export interface SchemaIndex {
@@ -47,6 +50,7 @@ export interface SchemaRelationship {
   nullable?: boolean;
   bi_directional?: boolean;
   index?: boolean;
+  cascadeDelete?: boolean;
   joinTableName?: string;
 }
 

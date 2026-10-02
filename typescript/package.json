@@ -10,11 +10,11 @@
     "packages/crud-typeorm",
     "packages/domain-events",
     "packages/postgrest-request",
-    "packages/schema-lint",
+    "packages/schema-tools",
     "packages/sdk"
   ],
   "scripts": {
-    "build": "npm run build -w @apso/crud-core -w @apso/crud-request -w @apso/postgrest-request -w @apso/crud-typeorm -w @apso/crud -w @apso/sdk -w @apso/domain-events -w @apso/schema-lint --if-present",
+    "build": "npm run build -w @apso/crud-core -w @apso/crud-request -w @apso/postgrest-request -w @apso/crud-typeorm -w @apso/crud -w @apso/sdk -w @apso/domain-events -w @apso/schema-tools --if-present",
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "clean": "npm run clean --workspaces --if-present"

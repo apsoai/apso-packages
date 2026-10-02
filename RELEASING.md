@@ -17,7 +17,7 @@ each package checks whether its directory changed since that package's last rele
 | `@apso/crud-typeorm` | `typescript/packages/crud-typeorm/` | `ts-crud-typeorm-vX.Y.Z` | npm |
 | `@apso/crud` | `typescript/packages/crud/` | `ts-crud-vX.Y.Z` | npm |
 | `@apso/sdk` | `typescript/packages/sdk/` | `ts-sdk-vX.Y.Z` | npm |
-| `@apso/schema-lint` | `typescript/packages/schema-lint/` | `ts-schema-lint-vX.Y.Z` | npm |
+| `@apso/schema-tools` | `typescript/packages/schema-tools/` | `ts-schema-tools-vX.Y.Z` | npm |
 | `apso-domain-events` | `python/packages/domain-events/` | `py-domain-events-vX.Y.Z` | PyPI |
 | `domainevents` (Go) | `go/domainevents/` | `go/domainevents/vX.Y.Z` | Go proxy (tag only) |
 
@@ -42,11 +42,15 @@ and pushed with the default token, so it never re-triggers the workflow.
 
 - **npm:** **Trusted Publishing** (GitHub OIDC), no token. On npmjs.com, for *each* package
   (`@apso/domain-events`, `@apso/crud-core`, `@apso/crud-request`, `@apso/postgrest-request`,
-  `@apso/crud-typeorm`, `@apso/crud`, `@apso/sdk`) → Settings → Trusted Publisher → GitHub
+  `@apso/crud-typeorm`, `@apso/crud`, `@apso/sdk`, `@apso/schema-tools`) → Settings → Trusted Publisher → GitHub
   Actions: organization `apsoai`, repository `apso-packages`, workflow filename
   `auto-release.yml`, no environment, with npm publish allowed. Once a release succeeds via
   OIDC, Publishing access can be set to disallow tokens. The publish step needs
   npm >= 11.5.1 (installed in the workflow on Node 22) and each package.json `repository.url` must point at this repo (provenance check).
+  A brand-new package (for example `@apso/schema-tools`) must exist on npm before a trusted
+  publisher can be added, so its first version is published by hand once
+  (`cd typescript && npm run build && npm publish -w @apso/schema-tools --access public`);
+  after that, set up the trusted publisher and let `auto-release.yml` ship every later version.
   The publish runs with an empty npm userconfig and blank `NODE_AUTH_TOKEN` so no token can
   shadow OIDC.
 - **PyPI:** configure **Trusted Publishing** on the `apso-domain-events` project → GitHub
