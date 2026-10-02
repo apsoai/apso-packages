@@ -213,6 +213,42 @@ describe("warning rules", () => {
   });
 });
 
+describe("REDUNDANT_MANY_TO_MANY", () => {
+  const bookClub = (): Schema => ({
+    entities: [
+      entity("Member"),
+      entity("ReadingGroup"),
+      entity("GroupMembership", [{ name: "joined_date", type: "date" }, { name: "role", type: "enum", values: ["member", "admin"] }]),
+    ],
+    relationships: [
+      { from: "Member", to: "ReadingGroup", type: "ManyToMany" },
+      { from: "GroupMembership", to: "Member", type: "ManyToOne" },
+      { from: "ReadingGroup", to: "GroupMembership", type: "OneToMany" },
+    ],
+  });
+  const redundant = (schema: Schema) => lintSchema(schema).issues.filter((i) => i.rule === "REDUNDANT_MANY_TO_MANY");
+
+  test("warns on a ManyToMany a join entity already models, either declaration direction", () => {
+    expect(redundant(bookClub())).toEqual([
+      expect.objectContaining({ severity: "warning", entity: "Member", relationship: "Member ManyToMany ReadingGroup", fixable: true }),
+    ]);
+    expect(redundant(bookClub())[0].message).toContain('"GroupMembership"');
+  });
+
+  test("fixSchema removes only the direct ManyToMany", () => {
+    const { schema, applied } = fixSchema(bookClub());
+    expect(applied.map((i) => i.rule)).toEqual(["REDUNDANT_MANY_TO_MANY"]);
+    expect(schema.relationships!.map((r) => r.type)).toEqual(["ManyToOne", "OneToMany"]);
+    expect(redundant(schema)).toEqual([]);
+  });
+
+  test("no warning without a join entity linking both sides", () => {
+    const schema = bookClub();
+    schema.relationships = schema.relationships!.filter((r) => r.from !== "ReadingGroup");
+    expect(redundant(schema)).toEqual([]);
+  });
+});
+
 describe("api", () => {
   test("every rule has a unique id", () => {
     expect(new Set(rules.map((r) => r.id)).size).toBe(rules.length);

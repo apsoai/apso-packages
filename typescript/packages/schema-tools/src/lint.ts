@@ -26,8 +26,9 @@ export function lintSchema(schema: Schema): LintResult {
 
 /**
  * Apply every deterministic fix (renames, type corrections, dropping duplicate
- * or ignored fields) to a copy of the schema. Never removes an entity or a
- * relationship. Re-lint the result: issues without a fix remain.
+ * or ignored fields) to a copy of the schema. Never removes an entity, or a
+ * relationship other than a ManyToMany a join entity already models.
+ * Re-lint the result: issues without a fix remain.
  */
 export function fixSchema<T extends Schema>(schema: T): { schema: T; applied: LintIssue[] } {
   const working: T = JSON.parse(JSON.stringify(schema));

@@ -558,6 +558,28 @@ export const rules: Rule[] = [
     }
   }),
 
+  rule("REDUNDANT_MANY_TO_MANY", "warning", (schema, report) => {
+    const rels = relationshipsOf(schema).filter(isWellFormed);
+    // Entity -> the entities it has a ManyToOne to (declared either way round).
+    const parents = new Map<string, Set<string>>();
+    for (const rel of rels) {
+      const [child, parent] = rel.type === "ManyToOne" ? [rel.from, rel.to] : rel.type === "OneToMany" ? [rel.to, rel.from] : [];
+      if (child && parent) parents.set(child, (parents.get(child) || new Set<string>()).add(parent));
+    }
+    for (const rel of rels) {
+      if (rel.type !== "ManyToMany" || rel.from === rel.to) continue;
+      const join = [...parents].find(([j, ps]) => j !== rel.from && j !== rel.to && ps.has(rel.from) && ps.has(rel.to))?.[0];
+      if (!join) continue;
+      report(
+        `${describeRelationship(rel)} duplicates the link through "${join}", which has ManyToOne relationships to both. Remove the ManyToMany and link them through ${join}.`,
+        { entity: rel.from, relationship: describeRelationship(rel) },
+        () => {
+          schema.relationships = relationshipsOf(schema).filter((r) => r !== rel);
+        }
+      );
+    }
+  }),
+
   rule("MISSING_TIMESTAMPS", "warning", (schema, report) => {
     for (const entity of entitiesOf(schema)) {
       const names = new Set(fieldsOf(entity).map((f) => f.name));
