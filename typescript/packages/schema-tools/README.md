@@ -9,7 +9,7 @@ Errors mean the CLI would scaffold code that does not compile or a database you 
 ```ts
 import { lintSchema, fixSchema, formatLintReport } from "@apso/schema-tools";
 
-const { schema, applied } = fixSchema(apsorc); // deterministic fixes only; never drops entities or relationships
+const { schema, applied } = fixSchema(apsorc); // deterministic fixes only; never drops entities, and drops a relationship only when it is a ManyToMany a join entity already models
 const result = lintSchema(schema);              // { issues, errorCount, warningCount }
 console.log(formatLintReport(result));          // plain text for a terminal or an LLM prompt
 ```

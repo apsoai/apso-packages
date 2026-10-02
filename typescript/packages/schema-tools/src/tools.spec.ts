@@ -168,4 +168,20 @@ describe("schema tools", () => {
     expect(lint.ok).toBe(true);
     expect(lint.message).toContain("0 errors");
   });
+
+  test("lint_schema reports a redundant ManyToMany", () => {
+    const schema: Schema = {
+      entities: [
+        { name: "Member", fields: [{ name: "name", type: "text" }] },
+        { name: "ReadingGroup", fields: [{ name: "name", type: "text" }] },
+        { name: "GroupMembership", fields: [{ name: "role", type: "text" }] },
+      ],
+      relationships: [
+        { from: "Member", to: "ReadingGroup", type: "ManyToMany" },
+        { from: "GroupMembership", to: "Member", type: "ManyToOne" },
+        { from: "GroupMembership", to: "ReadingGroup", type: "ManyToOne" },
+      ],
+    };
+    expect(runSchemaTool(schema, "lint_schema").message).toMatch(/WARNING REDUNDANT_MANY_TO_MANY Member: .*\(auto-fixable\)/);
+  });
 });
