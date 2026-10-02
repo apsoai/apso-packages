@@ -1,6 +1,7 @@
 import axios, { AxiosInstance } from 'axios';
 import { EntityClient, QueryBuilder } from './EntityClient';
 import { RequestQueryBuilder, CondOperator } from '@apso/crud-request';
+import { PostgrestQueryBuilder, PostgrestExecutor, PostgrestError } from './postgrest';
 
 // ============================================================================
 // Types
@@ -214,6 +215,84 @@ class ApsoClient {
   }
 
   /**
+   * Supabase-compatible query builder (postgrest-js shape). Serializes to the
+   * Apso PostgREST dialect and returns `{ data, error }` (never throws).
+   * @example
+   * const { data, error } = await client.from('users').select('*').eq('status', 'active')
+   */
+  public from(table: string): PostgrestQueryBuilder {
+    return new PostgrestQueryBuilder(table, this.postgrestExec);
+  }
+
+  /** Raw fetch transport for the PostgREST builder — resolves to a response
+   *  object and never throws (errors surface on `.error`). */
+  private postgrestExec: PostgrestExecutor = async ({ path, method, searchParams, body, headers }) => {
+    const qs = searchParams.toString();
+    const url = `${this.baseURL}${path}${qs ? `?${qs}` : ''}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    try {
+      if (this.debug) console.log(`[ApsoClient][DEBUG][pg] ${method} ${url}`);
+      const response = await fetch(url, {
+        method,
+        headers: { ...this.getHeaders(), ...headers },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+      const count = this.parseContentRangeCount(response.headers.get('content-range'));
+      const text = await response.text();
+      let parsed: unknown = null;
+      if (text) {
+        try { parsed = JSON.parse(text); } catch { parsed = text; }
+      }
+      if (!response.ok) {
+        return {
+          data: null,
+          error: this.toPostgrestError(parsed, response.status),
+          count, status: response.status, statusText: response.statusText,
+        };
+      }
+      return { data: parsed, error: null, count, status: response.status, statusText: response.statusText };
+    } catch (e: any) {
+      const isAbort = e?.name === 'AbortError';
+      return {
+        data: null,
+        error: {
+          message: isAbort ? `Request timed out after ${this.timeout}ms` : (e?.message ?? 'Network request failed'),
+          details: null, hint: null, code: isAbort ? 'TIMEOUT' : 'NETWORK',
+        },
+        count: null, status: 0, statusText: isAbort ? 'Timeout' : 'Network Error',
+      };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
+  private parseContentRangeCount(header: string | null): number | null {
+    if (!header) return null;
+    const total = header.split('/')[1];
+    if (!total || total === '*') return null;
+    const n = parseInt(total, 10);
+    return isNaN(n) ? null : n;
+  }
+
+  private toPostgrestError(body: unknown, status: number): PostgrestError {
+    if (body && typeof body === 'object') {
+      const b = body as any;
+      return {
+        message: b.message ?? b.error ?? `HTTP ${status}`,
+        details: b.details ?? (Array.isArray(b.message) ? b.message.join('; ') : null),
+        hint: b.hint ?? null,
+        code: b.code ?? String(status),
+      };
+    }
+    return {
+      message: typeof body === 'string' && body ? body : `HTTP ${status}`,
+      details: null, hint: null, code: String(status),
+    };
+  }
+
+  /**
    * Perform a GET request with optional caching.
    */
   public async get<T>(
@@ -361,3 +440,17 @@ class ApsoClientFactory {
 
 export { ApsoClient, ApsoClientFactory, QueryBuilder };
 export { EntityClient, EntityQueryBuilder } from './EntityClient';
+export { PostgrestQueryBuilder, PostgrestFilterBuilder } from './postgrest';
+export type { PostgrestResponse, PostgrestError, PostgrestExecutor } from './postgrest';
+
+/**
+ * Supabase-familiar entry point. Returns a client whose `.from(table)` mirrors
+ * `@supabase/supabase-js`'s query builder, so a Supabase app can swap the
+ * import and keep most data calls unchanged.
+ * @example
+ * const apso = createClient({ baseURL: 'https://api.example.com', apiKey: 'key' })
+ * const { data, error } = await apso.from('posts').select('*').eq('published', true)
+ */
+export function createClient(config: ApsoClientConfig): ApsoClient {
+  return ApsoClientFactory.getClient(config);
+}
