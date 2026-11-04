@@ -1,5 +1,5 @@
 import { formatLintReport, lintSchema } from "./lint";
-import { camelCase, describeRelationship, RELATIONSHIP_TYPES } from "./naming";
+import { camelCase, describeRelationship, RELATIONSHIP_TYPES, usesPlatformSpelling } from "./naming";
 import { LintIssue, Schema, SchemaEntity, SchemaField, SchemaRelationship } from "./types";
 
 /**
@@ -140,11 +140,6 @@ function findField(entity: SchemaEntity, name: string): SchemaField | undefined 
 function missingField(schema: Schema, entity: SchemaEntity, name: string): ToolResult {
   const names = (entity.fields || []).map((f) => f.name).join(", ") || "none";
   return fail(schema, `Field "${name}" not found on "${entity.name}". Fields: ${names}.`);
-}
-
-/** The platform writes isUnique/isIndex, the CLI unique/index. Keep whichever the schema already uses. */
-function usesPlatformSpelling(schema: Schema): boolean {
-  return (schema.entities || []).some((e) => (e.fields || []).some((f) => "isUnique" in f || "isIndex" in f));
 }
 
 /** Copies field settings from tool input onto `field`; `null` removes a setting. */
