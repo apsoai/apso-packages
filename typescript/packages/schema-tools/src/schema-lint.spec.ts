@@ -275,3 +275,24 @@ describe("api", () => {
     expect(formatLintReport(lintSchema({ entities: [] }))).toBe("No schema issues found.");
   });
 });
+
+describe("index and unique coverage", () => {
+  const scoped = (uniques?: { fields: string[] }[]): Schema => ({
+    entities: [entity("Organization"), { ...entity("Member", [{ name: "email", type: "text" }]), uniques }],
+    relationships: [{ from: "Member", to: "Organization", type: "ManyToOne" }],
+  });
+  const issue = (schema: Schema, rule: string) => lintSchema(schema).issues.find((i) => i.rule === rule);
+
+  test("a unique that starts with the foreign key indexes it", () => {
+    expect(issue(scoped(), "FOREIGN_KEY_NOT_INDEXED")).toBeDefined();
+    expect(issue(scoped([{ fields: ["organizationId", "email"] }]), "FOREIGN_KEY_NOT_INDEXED")).toBeUndefined();
+  });
+
+  test("email unique per tenant is enough, and the fix names the schema's own spelling", () => {
+    expect(issue(scoped([{ fields: ["organizationId", "email"] }]), "EMAIL_NOT_UNIQUE")).toBeUndefined();
+    expect(issue(scoped(), "EMAIL_NOT_UNIQUE")?.message).toContain('"unique": true');
+    const platform = scoped();
+    platform.entities[0].fields = [{ name: "label", type: "text", isIndex: false }];
+    expect(issue(platform, "EMAIL_NOT_UNIQUE")?.message).toContain('"isUnique": true');
+  });
+});
