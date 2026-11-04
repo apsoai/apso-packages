@@ -374,6 +374,10 @@ export const rules: Rule[] = [
         "id", "created_at", "updated_at",
         ...fieldsOf(entity).map((f) => f.name),
         ...(props.get(entity.name)?.keys() || []),
+        // The CLI gives the declaring side of a OneToOne a "<to_name or target>Id" join column.
+        ...relationshipsOf(schema)
+          .filter((r) => r?.type === "OneToOne" && r.from === entity.name && typeof r.to === "string")
+          .map((r) => `${camelCase(r.to_name || r.to)}Id`),
       ]);
       for (const kind of ["indexes", "uniques"] as const) {
         const list = entity[kind];

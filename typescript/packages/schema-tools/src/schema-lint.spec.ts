@@ -295,4 +295,14 @@ describe("index and unique coverage", () => {
     platform.entities[0].fields = [{ name: "label", type: "text", isIndex: false }];
     expect(issue(platform, "EMAIL_NOT_UNIQUE")?.message).toContain('"isUnique": true');
   });
+
+  test("a OneToOne's join column can be indexed", () => {
+    const schema: Schema = {
+      entities: [entity("Party"), { ...entity("Person"), uniques: [{ fields: ["partyId", "label"] }] }],
+      relationships: [{ from: "Person", to: "Party", type: "OneToOne" }],
+    };
+    expect(issue(schema, "INDEX_UNKNOWN_FIELD")).toBeUndefined();
+    schema.entities[1].uniques = [{ fields: ["nopeId"] }];
+    expect(issue(schema, "INDEX_UNKNOWN_FIELD")).toBeDefined();
+  });
 });
