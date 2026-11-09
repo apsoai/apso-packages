@@ -83,6 +83,24 @@ export function relationshipSides(schema: Schema): RelationshipSide[] {
 }
 
 /**
+ * Foreign key columns each entity gets from the OneToOne relationships it
+ * owns, mirroring createFromOneToOneRelationship in @apso/cli parse.ts: the
+ * `from` side owns the key unless the relationship is bi_directional with a
+ * to_name. The bare @JoinColumn() makes TypeORM name it `${property}Id`, and
+ * the relationship makes it UNIQUE.
+ */
+export function oneToOneColumns(schema: Schema): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const rel of Array.isArray(schema.relationships) ? schema.relationships : []) {
+    if (rel?.type !== "OneToOne" || typeof rel.from !== "string" || typeof rel.to !== "string") continue;
+    if (rel.bi_directional && rel.to_name) continue;
+    if (!out.has(rel.from)) out.set(rel.from, new Set());
+    out.get(rel.from)!.add(`${camelCase(rel.to_name || rel.to)}Id`);
+  }
+  return out;
+}
+
+/**
  * Properties the CLI generates per entity, deduped the way
  * getRelationshipForTemplate does (by other entity + reference name), plus any
  * property that two different relationships both generate on one entity.
