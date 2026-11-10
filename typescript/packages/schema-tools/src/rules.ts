@@ -3,6 +3,7 @@ import {
   RELATIONSHIP_TYPES,
   camelCase,
   describeRelationship,
+  oneToOneColumns,
   pascalCase,
   relationshipProperties,
   snakeCase,
@@ -369,15 +370,13 @@ export const rules: Rule[] = [
 
   rule("INDEX_UNKNOWN_FIELD", "error", (schema, report) => {
     const { props } = relationshipProperties(schema);
+    const oneToOne = oneToOneColumns(schema);
     for (const entity of entitiesOf(schema)) {
       const known = new Set([
         "id", "created_at", "updated_at",
         ...fieldsOf(entity).map((f) => f.name),
         ...(props.get(entity.name)?.keys() || []),
-        // The CLI gives the declaring side of a OneToOne a "<to_name or target>Id" join column.
-        ...relationshipsOf(schema)
-          .filter((r) => r?.type === "OneToOne" && r.from === entity.name && typeof r.to === "string")
-          .map((r) => `${camelCase(r.to_name || r.to)}Id`),
+        ...(oneToOne.get(entity.name) || []),
       ]);
       for (const kind of ["indexes", "uniques"] as const) {
         const list = entity[kind];
@@ -506,6 +505,30 @@ export const rules: Rule[] = [
         report(`Entity "${name}" is plural. Name entities in the singular, e.g. "${singular}"; Apso pluralizes routes and collections itself.`, {
           entity: name,
         });
+      } else if (/[A-Z]{2}/.test(name)) {
+        // No fix: renaming the entity renames its table and foreign key columns.
+        const suggested = name.replace(/[A-Z]+(?=[A-Z][a-z]|[^A-Za-z]|$)/g, (run) => run[0] + run.slice(1).toLowerCase());
+        report(
+          `Entity "${name}" has a run of capitals, so its table is "${tableName(entity)}" and its foreign keys are "${camelCase(name)}Id". Write it as "${suggested}" to get "${tableName({ ...entity, name: suggested })}" and "${camelCase(suggested)}Id". Renaming an entity that is already deployed renames its table, so only do this before the first deploy.`,
+          { entity: name }
+        );
+      }
+    }
+  }),
+
+  rule("REDUNDANT_ONE_TO_ONE_UNIQUE", "warning", (schema, report) => {
+    const oneToOne = oneToOneColumns(schema);
+    for (const entity of entitiesOf(schema)) {
+      const owned = oneToOne.get(entity.name);
+      if (!owned || !Array.isArray(entity.uniques)) continue;
+      for (const unique of entity.uniques) {
+        const fields = Array.isArray(unique?.fields) ? unique.fields : [];
+        if (fields.length !== 1 || !owned.has(fields[0])) continue;
+        report(
+          `Entity "${entity.name}" has an entry in "uniques" on "${fields[0]}", which its OneToOne relationship already makes unique. Apso skips it; remove it.`,
+          { entity: entity.name, field: fields[0] },
+          () => (entity.uniques = listOf(entity.uniques).filter((u) => u !== unique))
+        );
       }
     }
   }),

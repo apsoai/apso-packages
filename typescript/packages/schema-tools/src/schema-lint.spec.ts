@@ -154,6 +154,23 @@ describe("error rules", () => {
     expect(fixed.uniques).toEqual([{ fields: ["label"] }]);
   });
 
+  test("INDEX_UNKNOWN_FIELD knows the FK column of a OneToOne the entity owns", () => {
+    const schema: Schema = {
+      entities: [
+        { ...entity("Setting"), uniques: [{ fields: ["workspaceId", "label"] }], indexes: [{ fields: ["workspaceId"] }] },
+        { ...entity("Workspace"), uniques: [{ fields: ["settingId"] }] },
+      ],
+      relationships: [{ from: "Setting", to: "Workspace", type: "OneToOne" }],
+    };
+    // Only the declaring side owns the key; Workspace has no settingId.
+    expect(errors(schema).map((i) => [i.entity, i.field])).toEqual([["Workspace", "settingId"]]);
+    const named: Schema = {
+      entities: [{ ...entity("Setting"), uniques: [{ fields: ["homeWorkspaceId", "label"] }] }, entity("Workspace")],
+      relationships: [{ from: "Setting", to: "Workspace", type: "OneToOne", to_name: "homeWorkspace" }],
+    };
+    expect(errors(named)).toEqual([]);
+  });
+
   test("RELATIONSHIP_MALFORMED: entries without from/to are reported once, not as missing entities", () => {
     const schema = {
       entities: [entity("User"), entity("Session")],
@@ -210,6 +227,37 @@ describe("warning rules", () => {
       "RESERVED_TABLE_NAME",
     ]);
     expect(fixSchema(schema).schema.entities[0].fields!.map((f) => f.name)).not.toContain("id");
+  });
+});
+
+describe("REDUNDANT_ONE_TO_ONE_UNIQUE", () => {
+  test("warns on a unique on exactly the OneToOne key and the fix removes only that entry", () => {
+    const schema: Schema = {
+      entities: [
+        { ...entity("Setting"), uniques: [{ fields: ["workspaceId"] }, { fields: ["workspaceId", "label"] }] },
+        entity("Workspace"),
+      ],
+      relationships: [{ from: "Setting", to: "Workspace", type: "OneToOne" }],
+    };
+    const found = lintSchema(schema).issues.filter((i) => i.rule === "REDUNDANT_ONE_TO_ONE_UNIQUE");
+    expect(found).toEqual([expect.objectContaining({ severity: "warning", entity: "Setting", field: "workspaceId", fixable: true })]);
+    expect(fixSchema(schema).schema.entities[0].uniques).toEqual([{ fields: ["workspaceId", "label"] }]);
+  });
+});
+
+describe("ENTITY_NAME_STYLE acronyms", () => {
+  test("warns on a run of capitals with the name to use, and has no fix", () => {
+    const issues = lintSchema({ entities: [entity("SLAPolicy"), entity("WorkspaceAPIKey"), entity("Invoice")] }).issues.filter(
+      (i) => i.rule === "ENTITY_NAME_STYLE"
+    );
+    expect(issues.map((i) => [i.entity, i.severity, i.fixable])).toEqual([
+      ["SLAPolicy", "warning", false],
+      ["WorkspaceAPIKey", "warning", false],
+    ]);
+    expect(issues[0].message).toContain('"s_l_a_policy"');
+    expect(issues[0].message).toContain('"slapolicyId"');
+    expect(issues[0].message).toContain('"SlaPolicy" to get "sla_policy" and "slaPolicyId"');
+    expect(issues[1].message).toContain('"WorkspaceApiKey" to get "workspace_api_key"');
   });
 });
 
