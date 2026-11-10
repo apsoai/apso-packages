@@ -18,7 +18,7 @@ import { APP_GUARD, NestFactory } from '@nestjs/core';
 import { ApiProperty, ApiQuery, DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { McpTool, mountMcp, toolsFromDocument } from './index';
+import { MCP_AUTH, McpAuth, McpTool, mountMcp, toolsFromDocument } from './index';
 
 class PublishDto {
   @ApiProperty()
@@ -112,5 +112,75 @@ describe('@apso/mcp', () => {
     expect(() => toolsFromDocument(untyped)).toThrow('the body has no schema');
     const twice: any = { paths: { '/a': { get: operation() }, '/b': { get: operation() } } };
     expect(() => toolsFromDocument(twice)).toThrow('already named "do_it"');
+  });
+});
+
+describe('@apso/mcp with OAuth sign-in', () => {
+  let app: INestApplication;
+  let base: string;
+
+  // The app's own token check, shared with MCP through the MCP_AUTH provider.
+  const auth: McpAuth = {
+    authorizationServers: ['https://login.example.com/'],
+    verify: async (req) => {
+      if (req.headers.authorization !== 'Bearer good') throw new UnauthorizedException();
+    },
+  };
+
+  @Module({
+    controllers: [NotesController],
+    providers: [
+      { provide: APP_GUARD, useClass: TokenGuard },
+      { provide: MCP_AUTH, useValue: auth },
+    ],
+  })
+  class OAuthAppModule {}
+
+  beforeAll(async () => {
+    app = await NestFactory.create(OAuthAppModule, { logger: false });
+    mountMcp(app, SwaggerModule.createDocument(app, new DocumentBuilder().setTitle('notes').build()));
+    await app.listen(0);
+    base = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}`;
+  });
+  afterAll(() => app.close());
+
+  const post = (headers: Record<string, string> = {}) =>
+    fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...headers },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    });
+
+  test('no token gets the 401 that points at the sign-in metadata', async () => {
+    const res = await post();
+    expect(res.status).toBe(401);
+    expect(res.headers.get('www-authenticate')).toBe(
+      `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"`,
+    );
+    const bad = await post({ authorization: 'Bearer expired' });
+    expect(bad.status).toBe(401);
+    expect(bad.headers.get('www-authenticate')).toContain('error="invalid_token"');
+  });
+
+  test('the metadata names the identity provider, at the path and root forms', async () => {
+    for (const path of ['/.well-known/oauth-protected-resource/mcp', '/.well-known/oauth-protected-resource']) {
+      const res = await fetch(base + path);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        resource: `${base}/mcp`,
+        authorization_servers: ['https://login.example.com/'],
+        bearer_methods_supported: ['header'],
+      });
+    }
+  });
+
+  test('a valid token lists and calls tools', async () => {
+    const client = new Client({ name: 'test', version: '1' });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { authorization: 'Bearer good' } } }),
+    );
+    expect((await client.listTools()).tools).toHaveLength(2);
+    const result: any = await client.callTool({ name: 'list_notes', arguments: {} });
+    expect(result.isError).toBeFalsy();
   });
 });
