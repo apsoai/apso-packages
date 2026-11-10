@@ -116,3 +116,8 @@ export function relationshipProperties(schema: Schema): {
   }
   return { props, clashes };
 }
+
+/** The platform writes isUnique/isIndex, the CLI unique/index. Keep whichever the schema already uses. */
+export function usesPlatformSpelling(schema: Schema): boolean {
+  return (schema.entities || []).some((e) => (e.fields || []).some((f) => "isUnique" in f || "isIndex" in f));
+}

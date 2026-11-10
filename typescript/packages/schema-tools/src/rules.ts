@@ -7,6 +7,7 @@ import {
   relationshipProperties,
   snakeCase,
   tableName,
+  usesPlatformSpelling,
 } from "./naming";
 import { Finding, Rule, Schema, SchemaEntity, SchemaField, SchemaRelationship, Severity } from "./types";
 
@@ -373,6 +374,10 @@ export const rules: Rule[] = [
         "id", "created_at", "updated_at",
         ...fieldsOf(entity).map((f) => f.name),
         ...(props.get(entity.name)?.keys() || []),
+        // The CLI gives the declaring side of a OneToOne a "<to_name or target>Id" join column.
+        ...relationshipsOf(schema)
+          .filter((r) => r?.type === "OneToOne" && r.from === entity.name && typeof r.to === "string")
+          .map((r) => `${camelCase(r.to_name || r.to)}Id`),
       ]);
       for (const kind of ["indexes", "uniques"] as const) {
         const list = entity[kind];
@@ -520,14 +525,14 @@ export const rules: Rule[] = [
 
   rule("EMAIL_NOT_UNIQUE", "warning", (schema, report) => {
     for (const entity of entitiesOf(schema)) {
-      const singleUniques = new Set([
-        ...listOf(entity.uniques).filter((u) => u?.fields?.length === 1).map((u) => u.fields[0]),
-        ...listOf(entity.indexes).filter((i) => i?.unique && i.fields?.length === 1).map((i) => i.fields[0]),
-      ]);
+      // A composite unique such as (organizationId, email) is unique per tenant, which is enough.
+      const inUnique = new Set(
+        [...listOf(entity.uniques), ...listOf(entity.indexes).filter((i) => i?.unique)].flatMap((u) => u?.fields || [])
+      );
       for (const field of fieldsOf(entity)) {
-        if (!/^(email|email_address|emailAddress)$/.test(field.name) || isUnique(field) || singleUniques.has(field.name)) continue;
+        if (!/^(email|email_address|emailAddress)$/.test(field.name) || isUnique(field) || inUnique.has(field.name)) continue;
         report(
-          `Field "${field.name}" on entity "${entity.name}" is not unique. If each ${entity.name} has its own email, set "isUnique": true so duplicates are rejected.`,
+          `Field "${field.name}" on entity "${entity.name}" is not unique. If each ${entity.name} has its own email, set "${usesPlatformSpelling(schema) ? "isUnique" : "unique"}": true so duplicates are rejected.`,
           { entity: entity.name, field: field.name }
         );
       }
@@ -537,7 +542,8 @@ export const rules: Rule[] = [
   rule("FOREIGN_KEY_NOT_INDEXED", "warning", (schema, report) => {
     const { props } = relationshipProperties(schema);
     for (const entity of entitiesOf(schema)) {
-      const indexedFirst = new Set(listOf(entity.indexes).map((i) => i?.fields?.[0]));
+      // A unique constraint is backed by an index, so one that starts with the key covers it.
+      const indexedFirst = new Set([...listOf(entity.indexes), ...listOf(entity.uniques)].map((i) => i?.fields?.[0]));
       const keys = [...(props.get(entity.name)?.values() || [])].filter(
         (p) => p.foreignKey && !p.side.rel.index && !indexedFirst.has(p.name)
       );
