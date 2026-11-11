@@ -438,7 +438,12 @@ describe('OpenAPI document for a PostgREST-only controller', () => {
     expect(op.summary).toBe('Get many Post');
     expect(op.description).toContain('Example: ?select=id,title,author(*)&title=ilike.*abc*&order=id.desc&limit=10');
     expect(op.responses['200'].schema ?? op.responses['200'].content['application/json'].schema).toMatchObject({ type: 'array' });
-    expect(op.responses['200'].headers['Content-Range']).toBeDefined();
+    // The description becomes the MCP tool description, and a tool call has no headers.
+    expect(op.description).toContain('Without limit the first 5 rows come back; send limit and offset for more.');
+    expect(op.description).not.toMatch(/Content-Range|Prefer/);
+    expect(`${op.summary}. ${op.description}`.length).toBeLessThan(450);
+    expect(op.responses['200'].headers['Content-Range'].description).toContain("'Prefer: count=exact'");
+    expect(op.responses['206'].headers['Content-Range']).toBeDefined();
     // eslint-disable-next-line no-console
     console.log('OPENAPI /pg-posts get\n' + JSON.stringify({ description: op.description, parameters: params }, null, 1));
   });

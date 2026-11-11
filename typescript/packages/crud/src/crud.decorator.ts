@@ -468,10 +468,11 @@ function postgrestListDescription(options: CrudControllerOptions): string {
     `&order=${first}.desc&limit=10`;
   return (
     `Returns ${entityName} rows as a JSON array. Filter with one parameter per column, value op.value. ` +
-    'Operators: eq, neq, gt, gte, lt, lte, like and ilike (* is the wildcard), in.(a,b), is.null, is.true, is.false. ' +
-    'Put not. in front to negate (not.eq.5). Filters on different columns must all match. ' +
-    `Without limit at most ${options.query?.limit ?? 20} rows come back. ` +
-    "The Content-Range response header gives the rows returned and, with the request header 'Prefer: count=exact', the total (0-9/42). " +
+    'Operators: eq, neq, gt, gte, lt, lte, like, ilike (* is the wildcard), in.(a,b), is.null, is.true, is.false. ' +
+    'Prefix not. to negate (not.eq.5). Filters on different columns must all match. ' +
+    // Content-Range and Prefer are documented on the responses, not here:
+    // @apso/mcp copies this text into the tool description, and a tool call has no headers.
+    `Without limit the first ${options.query?.limit ?? 20} rows come back; send limit and offset for more. ` +
     `Example: ${example}`
   );
 }
