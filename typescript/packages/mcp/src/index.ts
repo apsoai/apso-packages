@@ -1,6 +1,7 @@
 import { IncomingMessage, ServerResponse } from 'http';
 import { Socket } from 'net';
 import { INestApplication } from '@nestjs/common';
+import { ModulesContainer } from '@nestjs/core';
 import { ApiExtension, OpenAPIObject } from '@nestjs/swagger';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -37,13 +38,75 @@ export interface McpRouteTool {
   query: string[];
 }
 
+/**
+ * DI token for the app's MCP sign-in settings. Provide a McpAuth under this
+ * token in any module and mountMcp picks it up, so the app's bootstrap does
+ * not have to change when auth is configured.
+ */
+export const MCP_AUTH = 'APSO_MCP_AUTH';
+
+/**
+ * Sign-in for MCP clients, when callers authenticate with OAuth access tokens
+ * from an identity provider (Auth0, Clerk, ...). The server only describes
+ * where to sign in (RFC 9728) and checks tokens; it never issues them.
+ */
+export interface McpAuth {
+  /** Issuer URLs of the identity providers whose tokens the API accepts. */
+  authorizationServers: string[];
+  /**
+   * Checks the request's credentials the same way the API does. Reject (throw)
+   * when they are missing, invalid or not issued for this API. When it resolves
+   * to an object with a string `clientId` (the client application the token was
+   * issued to), tool calls carry it at `req.apso.mcp.clientId`.
+   */
+  verify: (req: IncomingMessage) => Promise<unknown>;
+  /**
+   * Public URL of the MCP endpoint, e.g. https://api.example.com/mcp. Clients
+   * ask the identity provider for a token for this URL. Default: built from
+   * the request's host, which is only right when no proxy rewrites it.
+   */
+  resource?: string;
+  scopesSupported?: string[];
+}
+
 export interface McpOptions {
   /** Server name reported to clients. */
   name?: string;
   version?: string;
   /** Where the MCP endpoint is served. Default: /mcp */
   path?: string;
+  /** OAuth sign-in for MCP clients. Default: the MCP_AUTH provider, when the app has one. */
+  auth?: McpAuth;
+  /**
+   * Origins a browser-based MCP client may call the endpoint from. Default: the
+   * app's own setting, the comma-separated ALLOWED_ORIGINS environment
+   * variable. '*' allows every origin. A request whose Origin header is not
+   * allowed gets 403; requests without an Origin header (every non-browser
+   * client) are not affected.
+   */
+  allowedOrigins?: string[] | '*';
 }
+
+/**
+ * How a route, guard or interceptor tells that a request is an MCP tool call:
+ * `req.apso.mcp` is set on every request dispatched for a tool. It is a
+ * property of the in-memory request object, so no header or body a REST
+ * caller sends can set it. `@apso/logging` reads the same property.
+ */
+export interface McpOrigin {
+  /** Name of the tool that was called. */
+  tool: string;
+  /** Client application the caller's token was issued to, when McpAuth.verify reports it. */
+  clientId?: string;
+}
+
+// What a browser client has to send and read on the MCP endpoint (Streamable
+// HTTP transport and RFC 9728 challenge). Request headers are reflected from
+// the preflight when it names them; this list is the fallback.
+const CORS_ALLOW_HEADERS = 'Authorization, Content-Type, Accept, Mcp-Protocol-Version, Mcp-Session-Id, Last-Event-ID, X-Api-Key, X-Request-Id';
+const CORS_EXPOSE_HEADERS = 'WWW-Authenticate, Mcp-Session-Id, Mcp-Protocol-Version, X-Request-Id';
+
+const PRM_PATH = '/.well-known/oauth-protected-resource';
 
 const METHODS = ['get', 'post', 'put', 'patch', 'delete'] as const;
 
@@ -140,10 +203,12 @@ function dispatchInMemory(
   method: string,
   url: string,
   headers: Record<string, string>,
+  origin: McpOrigin,
   body?: unknown,
 ): Promise<{ statusCode: number; payload: string }> {
   return new Promise((resolve) => {
     const req = new IncomingMessage(new Socket());
+    (req as any).apso = { mcp: origin };
     req.method = method;
     req.url = url;
     req.headers = { ...headers };
@@ -182,6 +247,7 @@ async function callTool(
   tool: McpRouteTool,
   args: Record<string, any>,
   callerHeaders: IncomingMessage['headers'],
+  clientId?: string,
 ) {
   const missing: string[] = [];
   const path = tool.path.replace(/\{(\w+)\}/g, (_, key) => {
@@ -205,11 +271,25 @@ async function callTool(
     if (value !== undefined && !NOT_FORWARDED.has(key)) headers[key] = Array.isArray(value) ? value.join(', ') : value;
   }
 
-  const response = await dispatchInMemory(dispatch, tool.method, qs ? `${path}?${qs}` : path, headers, args.body);
+  const response = await dispatchInMemory(dispatch, tool.method, qs ? `${path}?${qs}` : path, headers, { tool: tool.name, ...(clientId ? { clientId } : {}) }, args.body);
   return {
     content: [{ type: 'text' as const, text: response.payload || `HTTP ${response.statusCode}` }],
     isError: response.statusCode >= 400,
   };
+}
+
+/** The MCP endpoint's public URL: the configured one, else what the request used. */
+function resourceUrl(req: IncomingMessage, auth: McpAuth, mcpPath: string): URL {
+  if (auth.resource) return new URL(auth.resource);
+  const first = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value)?.split(',')[0].trim();
+  const proto = first(req.headers['x-forwarded-proto']) ?? ((req.socket as any)?.encrypted ? 'https' : 'http');
+  const host = first(req.headers['x-forwarded-host']) ?? req.headers.host ?? 'localhost';
+  return new URL(`${proto}://${host}${mcpPath}`);
+}
+
+/** Where a client finds the sign-in metadata for this endpoint (RFC 9728 path form). */
+function metadataUrl(resource: URL): string {
+  return `${resource.origin}${PRM_PATH}${resource.pathname === '/' ? '' : resource.pathname}`;
 }
 
 /**
@@ -217,19 +297,92 @@ async function callTool(
  * stateless). Call it before the app starts, with the app's OpenAPI document.
  * Nothing is mounted when no route is marked.
  *
- * Listing tools is open, like the OpenAPI document it is built from. Calling
- * one is checked by the route's own guards.
+ * Calling a tool is always checked by the route's own guards. With OAuth
+ * sign-in configured (McpAuth), every request to the endpoint needs a valid
+ * token and an unauthenticated one gets the 401 that starts sign-in.
+ * Without it, listing tools is open, like the OpenAPI document.
  */
 export function mountMcp(app: INestApplication, document: OpenAPIObject, options: McpOptions = {}): McpRouteTool[] {
   const tools = toolsFromDocument(document);
   if (tools.length === 0) return tools;
   const dispatch = app.getHttpAdapter().getInstance();
+  const mcpPath = options.path ?? '/mcp';
+  // Look the provider up by scanning modules: app.get() on a missing token
+  // ends the process under Nest's default abortOnError. No provider means
+  // callers authenticate some other way (API key, session).
+  let auth = options.auth;
+  for (const module of auth ? [] : app.get(ModulesContainer).values()) {
+    auth = auth ?? (module.providers.get(MCP_AUTH)?.instance as McpAuth | undefined);
+  }
+
+  if (auth) {
+    const settings = auth;
+    // Tells an MCP client where to sign in. Public by design, and readable
+    // from a browser-based client on another origin.
+    app.use(PRM_PATH, (req: IncomingMessage, res: ServerResponse) => {
+      const resource = resourceUrl(req, settings, mcpPath);
+      res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*', 'cache-control': 'max-age=300' });
+      res.end(
+        JSON.stringify({
+          resource: resource.href.replace(/\/$/, ''),
+          authorization_servers: settings.authorizationServers,
+          bearer_methods_supported: ['header'],
+          ...(settings.scopesSupported ? { scopes_supported: settings.scopesSupported } : {}),
+        }),
+      );
+    });
+  }
+
   const listed = tools.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations }));
 
-  app.use(options.path ?? '/mcp', async (req: IncomingMessage, res: ServerResponse) => {
+  const allowedOrigins =
+    options.allowedOrigins ??
+    (process.env.ALLOWED_ORIGINS ?? '')
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean);
+
+  app.use(mcpPath, async (req: IncomingMessage, res: ServerResponse) => {
+    const origin = req.headers.origin;
+    if (origin) {
+      // The MCP transport requires 403 for an Origin that is not allowed.
+      if (allowedOrigins !== '*' && !allowedOrigins.includes(origin)) {
+        res.writeHead(403, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32000, message: 'Origin not allowed' }, id: null }));
+        return;
+      }
+      res.setHeader('access-control-allow-origin', origin);
+      res.setHeader('vary', 'Origin');
+      res.setHeader('access-control-expose-headers', CORS_EXPOSE_HEADERS);
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204, {
+          'access-control-allow-methods': 'POST',
+          'access-control-allow-headers': req.headers['access-control-request-headers'] ?? CORS_ALLOW_HEADERS,
+          'access-control-max-age': '86400',
+        });
+        res.end();
+        return;
+      }
+    }
+    let clientId: string | undefined;
     if (req.method !== 'POST') {
       res.writeHead(405, { allow: 'POST' }).end();
       return;
+    }
+    if (auth) {
+      try {
+        const verified: any = await auth.verify(req);
+        if (typeof verified?.clientId === 'string') clientId = verified.clientId;
+      } catch {
+        // The 401 is what starts sign-in: it points the client at the metadata.
+        const challenge = `Bearer resource_metadata="${metadataUrl(resourceUrl(req, auth, mcpPath))}"`;
+        res.writeHead(401, {
+          'www-authenticate': req.headers.authorization ? `${challenge}, error="invalid_token"` : challenge,
+          'content-type': 'application/json',
+        });
+        res.end(JSON.stringify({ error: 'unauthorized' }));
+        return;
+      }
     }
     const server = new Server(
       { name: options.name ?? document.info?.title ?? 'api', version: options.version ?? document.info?.version ?? '1.0' },
@@ -241,7 +394,7 @@ export function mountMcp(app: INestApplication, document: OpenAPIObject, options
       if (!tool) {
         return { content: [{ type: 'text' as const, text: `Unknown tool ${params.name}` }], isError: true };
       }
-      return callTool(dispatch, tool, params.arguments ?? {}, req.headers);
+      return callTool(dispatch, tool, params.arguments ?? {}, req.headers, clientId);
     });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
