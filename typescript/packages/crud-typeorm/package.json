@@ -29,7 +29,7 @@
     "directory": "typescript/packages/crud-typeorm"
   },
   "dependencies": {
-    "@apso/crud-core": "^1.0.0"
+    "@apso/crud-core": "^1.0.3"
   },
   "peerDependencies": {
     "@nestjs/common": "^9.0.0 || ^10.0.0",
