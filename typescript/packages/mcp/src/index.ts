@@ -55,7 +55,9 @@ export interface McpAuth {
   authorizationServers: string[];
   /**
    * Checks the request's credentials the same way the API does. Reject (throw)
-   * when they are missing, invalid or not issued for this API.
+   * when they are missing, invalid or not issued for this API. When it resolves
+   * to an object with a string `clientId` (the client application the token was
+   * issued to), tool calls carry it at `req.apso.mcp.clientId`.
    */
   verify: (req: IncomingMessage) => Promise<unknown>;
   /**
@@ -75,7 +77,34 @@ export interface McpOptions {
   path?: string;
   /** OAuth sign-in for MCP clients. Default: the MCP_AUTH provider, when the app has one. */
   auth?: McpAuth;
+  /**
+   * Origins a browser-based MCP client may call the endpoint from. Default: the
+   * app's own setting, the comma-separated ALLOWED_ORIGINS environment
+   * variable. '*' allows every origin. A request whose Origin header is not
+   * allowed gets 403; requests without an Origin header (every non-browser
+   * client) are not affected.
+   */
+  allowedOrigins?: string[] | '*';
 }
+
+/**
+ * How a route, guard or interceptor tells that a request is an MCP tool call:
+ * `req.apso.mcp` is set on every request dispatched for a tool. It is a
+ * property of the in-memory request object, so no header or body a REST
+ * caller sends can set it. `@apso/logging` reads the same property.
+ */
+export interface McpOrigin {
+  /** Name of the tool that was called. */
+  tool: string;
+  /** Client application the caller's token was issued to, when McpAuth.verify reports it. */
+  clientId?: string;
+}
+
+// What a browser client has to send and read on the MCP endpoint (Streamable
+// HTTP transport and RFC 9728 challenge). Request headers are reflected from
+// the preflight when it names them; this list is the fallback.
+const CORS_ALLOW_HEADERS = 'Authorization, Content-Type, Accept, Mcp-Protocol-Version, Mcp-Session-Id, Last-Event-ID, X-Api-Key, X-Request-Id';
+const CORS_EXPOSE_HEADERS = 'WWW-Authenticate, Mcp-Session-Id, Mcp-Protocol-Version, X-Request-Id';
 
 const PRM_PATH = '/.well-known/oauth-protected-resource';
 
@@ -174,10 +203,12 @@ function dispatchInMemory(
   method: string,
   url: string,
   headers: Record<string, string>,
+  origin: McpOrigin,
   body?: unknown,
 ): Promise<{ statusCode: number; payload: string }> {
   return new Promise((resolve) => {
     const req = new IncomingMessage(new Socket());
+    (req as any).apso = { mcp: origin };
     req.method = method;
     req.url = url;
     req.headers = { ...headers };
@@ -216,6 +247,7 @@ async function callTool(
   tool: McpRouteTool,
   args: Record<string, any>,
   callerHeaders: IncomingMessage['headers'],
+  clientId?: string,
 ) {
   const missing: string[] = [];
   const path = tool.path.replace(/\{(\w+)\}/g, (_, key) => {
@@ -239,7 +271,7 @@ async function callTool(
     if (value !== undefined && !NOT_FORWARDED.has(key)) headers[key] = Array.isArray(value) ? value.join(', ') : value;
   }
 
-  const response = await dispatchInMemory(dispatch, tool.method, qs ? `${path}?${qs}` : path, headers, args.body);
+  const response = await dispatchInMemory(dispatch, tool.method, qs ? `${path}?${qs}` : path, headers, { tool: tool.name, ...(clientId ? { clientId } : {}) }, args.body);
   return {
     content: [{ type: 'text' as const, text: response.payload || `HTTP ${response.statusCode}` }],
     isError: response.statusCode >= 400,
@@ -303,14 +335,44 @@ export function mountMcp(app: INestApplication, document: OpenAPIObject, options
 
   const listed = tools.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations }));
 
+  const allowedOrigins =
+    options.allowedOrigins ??
+    (process.env.ALLOWED_ORIGINS ?? '')
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean);
+
   app.use(mcpPath, async (req: IncomingMessage, res: ServerResponse) => {
+    const origin = req.headers.origin;
+    if (origin) {
+      // The MCP transport requires 403 for an Origin that is not allowed.
+      if (allowedOrigins !== '*' && !allowedOrigins.includes(origin)) {
+        res.writeHead(403, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32000, message: 'Origin not allowed' }, id: null }));
+        return;
+      }
+      res.setHeader('access-control-allow-origin', origin);
+      res.setHeader('vary', 'Origin');
+      res.setHeader('access-control-expose-headers', CORS_EXPOSE_HEADERS);
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204, {
+          'access-control-allow-methods': 'POST',
+          'access-control-allow-headers': req.headers['access-control-request-headers'] ?? CORS_ALLOW_HEADERS,
+          'access-control-max-age': '86400',
+        });
+        res.end();
+        return;
+      }
+    }
+    let clientId: string | undefined;
     if (req.method !== 'POST') {
       res.writeHead(405, { allow: 'POST' }).end();
       return;
     }
     if (auth) {
       try {
-        await auth.verify(req);
+        const verified: any = await auth.verify(req);
+        if (typeof verified?.clientId === 'string') clientId = verified.clientId;
       } catch {
         // The 401 is what starts sign-in: it points the client at the metadata.
         const challenge = `Bearer resource_metadata="${metadataUrl(resourceUrl(req, auth, mcpPath))}"`;
@@ -332,7 +394,7 @@ export function mountMcp(app: INestApplication, document: OpenAPIObject, options
       if (!tool) {
         return { content: [{ type: 'text' as const, text: `Unknown tool ${params.name}` }], isError: true };
       }
-      return callTool(dispatch, tool, params.arguments ?? {}, req.headers);
+      return callTool(dispatch, tool, params.arguments ?? {}, req.headers, clientId);
     });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
