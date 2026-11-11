@@ -36,15 +36,18 @@ Nothing is mounted when no route is marked.
 
 The tool's input schema comes from the route's OpenAPI operation:
 
-- path and query parameters become top-level arguments
+- path and query parameters become top-level arguments. Only documented query parameters are sent to the route.
+- a query parameter documented as an object (`style: form, explode: true`) is sent one key per query parameter: `{ "comments.likes": "gt.5" }` goes out as `?comments.likes=gt.5`. `@apso/crud` uses this for filters on embedded rows.
 - the JSON request body becomes the `body` argument
+
+When a route answers `206` with a `Content-Range` header, the tool result gets a second line, for example `Partial result: rows 0-4 of 6. Send limit and offset for the rest.` The model only sees the body, so without it a default page size would read as the whole result.
 
 `@McpTool` options:
 
 | Option | Default |
 |---|---|
 | `name` | the route's OpenAPI `operationId` |
-| `description` | the route's `@ApiOperation` summary |
+| `description` | the route's `@ApiOperation` summary, then its description |
 | `destructive` | `true` for `DELETE` routes |
 
 `GET` routes are marked read-only.
