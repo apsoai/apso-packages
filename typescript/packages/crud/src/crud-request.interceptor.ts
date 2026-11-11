@@ -28,7 +28,7 @@ import {
 } from '@apso/crud-core';
 import { CrudRequestParser } from '@apso/crud-request';
 import { PostgrestRequestParser } from '@apso/postgrest-request';
-import { detectDialect } from './dialect';
+import { resolveDialect } from './dialect';
 
 @Injectable()
 export class CrudRequestInterceptor implements NestInterceptor {
@@ -62,13 +62,18 @@ export class CrudRequestInterceptor implements NestInterceptor {
       }
     }
 
-    // Select the dialect (header override or param-shape), build the matching
+    // Select the dialect (the route's accepted dialects, then header override
+    // or param-shape when it accepts both), build the matching
     // parser, and parse. Both parsers share the same parse(query, params,
     // auth) -> ParsedRequest contract, so the engine downstream is identical.
     // An invalid header or an ambiguous mixed-dialect query throws
-    // RequestQueryException -> 400 (see detectDialect / docs/DIALECTS.md).
+    // RequestQueryException -> 400 (see resolveDialect / docs/DIALECTS.md).
     try {
-      const dialect = detectDialect(request.query, request.headers?.['x-crud-dialect']);
+      const dialect = resolveDialect(
+        request.query,
+        request.headers?.['x-crud-dialect'],
+        crudOptions.dialects,
+      );
       const parser =
         dialect === 'postgrest'
           ? new PostgrestRequestParser(crudOptions)

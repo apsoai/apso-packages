@@ -26,6 +26,7 @@ build either dialect.
    | Signal | Dialect |
    |---|---|
    | `fields`, `filter`, `or`, `join`, `sort`, `s`, `per_page` | nestjsx |
+   | `or=(...)` in parentheses (PostgREST's logical group) | PostgREST |
    | `select`, `order` | PostgREST |
    | a bare `col=op.value` (e.g. `age=gt.30`, `email=is.null`, `name=not.eq.Ada`) | PostgREST |
    | `limit`, `offset`, `page`, `cache` | neutral (no signal) |
@@ -40,6 +41,47 @@ build either dialect.
 
 The resolved dialect is echoed back on the `X-Crud-Dialect` response header, so
 clients and the conformance battery can confirm which parser ran.
+
+## Accepting one dialect only
+
+By default every controller accepts both dialects. The `dialects` option narrows
+that, per controller or for the whole app:
+
+```ts
+// One controller
+@Crud({ model: { type: Post }, dialects: ['postgrest'] })
+
+// Every controller, set once at start-up (a controller's own option wins)
+import { setAcceptedDialects } from '@apso/crud';
+setAcceptedDialects(['postgrest']);
+```
+
+With `['postgrest']`:
+
+- Detection is skipped. Every request is parsed as PostgREST, including an
+  empty query and `?limit=10`, which the default reads as nestjsx.
+- A nestjsx parameter is a **400** that names the parameter and what to send
+  instead:
+
+  | nestjsx parameter | PostgREST equivalent in the message |
+  |---|---|
+  | `fields` | `select=id,name` |
+  | `filter` | a column filter, `age=gt.30` |
+  | `or` (not in `or=(...)` form) | `or=(age.lt.18,age.gt.65)` |
+  | `join` | an embed in `select`, `select=*,posts(title)` |
+  | `sort` | `order=age.desc` |
+  | `s` | column filters with `or=(...)` and `and=(...)` groups |
+  | `per_page` | `limit` |
+  | `page` | `limit` and `offset` |
+  | `cache` | none, remove it |
+
+  A column that shares one of these names is still filterable the PostgREST
+  way (`?page=eq.2`): the 400 applies only when the value is not `op.value`.
+- `X-Crud-Dialect: nestjsx` is a **400**. `X-Crud-Dialect: postgrest` is
+  accepted and changes nothing.
+
+`['nestjsx']` is the mirror image for the header and for detection. The default,
+and `['nestjsx', 'postgrest']`, behave exactly as described above.
 
 ## Why neutral params don't force a dialect
 

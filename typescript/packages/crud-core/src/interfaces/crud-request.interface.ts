@@ -170,6 +170,14 @@ export interface CrudRequestOptions {
     };
   };
   auth?: CrudAuthOptions;
+  /**
+   * Query dialects this controller accepts. Default: both (`['nestjsx',
+   * 'postgrest']`), or whatever `setAcceptedDialects` set for the app.
+   * With `['postgrest']` the dialect is not detected: every request is parsed
+   * as PostgREST, a nestjsx parameter (`filter`, `join`, `s`, ...) is a 400
+   * that names the PostgREST equivalent, and `X-Crud-Dialect: nestjsx` is a 400.
+   */
+  dialects?: Array<'nestjsx' | 'postgrest'>;
 }
 
 /**

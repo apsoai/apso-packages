@@ -53,6 +53,11 @@ const NOT_MAP: Record<string, FilterOperator> = {
   in: '$notin',
   like: '$excl',
   ilike: '$exclL',
+  // NOT (a > b) and a <= b agree on every row, NULLs included (both drop them).
+  gt: '$lte',
+  gte: '$lt',
+  lt: '$gte',
+  lte: '$gt',
 };
 
 export class PostgrestRequestParser {
@@ -238,13 +243,18 @@ export class PostgrestRequestParser {
     return root;
   }
 
-  /** Split on commas that are NOT inside parentheses (for nested embeds). */
+  /** Split on commas that are NOT inside parentheses or double quotes. */
   private splitTopLevel(s: string): string[] {
     const out: string[] = [];
     let depth = 0;
     let cur = '';
+    let quoted = false;
     for (const ch of s) {
-      if (ch === '(') { depth++; cur += ch; }
+      // A double-quoted value may hold commas and parentheses (PostgREST
+      // reserved characters): or=(name.eq."Doe, Jane",age.gt.3).
+      if (ch === '"') { quoted = !quoted; cur += ch; }
+      else if (quoted) cur += ch;
+      else if (ch === '(') { depth++; cur += ch; }
       else if (ch === ')') { depth--; cur += ch; }
       else if (ch === ',' && depth === 0) { out.push(cur); cur = ''; }
       else cur += ch;
@@ -328,8 +338,12 @@ export class PostgrestRequestParser {
     return result;
   }
 
-  /** Parse `op.value` (or `not.op.value`) for a column. */
-  private parseCondition(field: string, spec: string): FilterCondition {
+  /**
+   * Parse `op.value` (or `not.op.value`) for a column. Inside an or=()/and=()
+   * group (`inGroup`) a value wrapped in double quotes is taken literally,
+   * which is how PostgREST passes reserved characters there.
+   */
+  private parseCondition(field: string, spec: string, inGroup = false): FilterCondition {
     const dot = spec.indexOf('.');
     if (dot === -1) {
       throw new RequestQueryException(`Invalid filter for '${field}': expected op.value`);
@@ -348,11 +362,22 @@ export class PostgrestRequestParser {
       rest = rest.slice(dot2 + 1);
     }
 
+    // Quoted value inside a group: strip the quotes and keep it a string.
+    // ponytail: no \" escapes inside the quotes; add when a value needs a literal quote.
+    let literal = false;
+    if (inGroup && op !== 'in' && rest.length >= 2 && rest.startsWith('"') && rest.endsWith('"')) {
+      rest = rest.slice(1, -1);
+      literal = true;
+    }
+
     // `is` — is.null / is.true / is.false (is.unknown => null)
     if (op === 'is') {
       const lit = rest.toLowerCase();
       if (lit === 'null' || lit === 'unknown') {
         return { field, operator: negated ? '$notnull' : '$isnull', value: undefined };
+      }
+      if (lit === 'not_null') {
+        return { field, operator: negated ? '$isnull' : '$notnull', value: undefined };
       }
       if (lit === 'true' || lit === 'false') {
         return { field, operator: negated ? '$ne' : '$eq', value: lit === 'true' };
@@ -376,7 +401,7 @@ export class PostgrestRequestParser {
     if (!mapped) {
       throw new RequestQueryException(`Unsupported PostgREST operator '${op}' for '${field}'`);
     }
-    return { field, operator: mapped, value: this.coerce(rest) };
+    return { field, operator: mapped, value: literal ? rest : this.coerce(rest) };
   }
 
   /**
@@ -408,7 +433,7 @@ export class PostgrestRequestParser {
       if (dot === -1) {
         throw new RequestQueryException(`Invalid condition in ${label}= group: ${part}`);
       }
-      const c = this.parseCondition(part.slice(0, dot), part.slice(dot + 1));
+      const c = this.parseCondition(part.slice(0, dot), part.slice(dot + 1), true);
       return { [c.field]: { [c.operator]: c.value } } as SearchCondition;
     });
     return { [key]: branches } as SearchCondition;

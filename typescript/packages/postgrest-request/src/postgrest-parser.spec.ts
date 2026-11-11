@@ -254,3 +254,39 @@ describe('PostgrestRequestParser', () => {
     });
   });
 });
+
+describe('gaps closed for the PostgREST-only switch (apsoai/cli "PostgREST query syntax only")', () => {
+  const parse = (q: any) => new PostgrestRequestParser().parse(q).parsed;
+
+  it('is.not_null and not.is.not_null', () => {
+    expect(parse({ sku: 'is.not_null' }).filter).toEqual([{ field: 'sku', operator: '$notnull', value: undefined }]);
+    expect(parse({ sku: 'not.is.not_null' }).filter).toEqual([{ field: 'sku', operator: '$isnull', value: undefined }]);
+  });
+
+  it('negated comparisons map to the opposite comparison', () => {
+    expect(parse({ qty: 'not.gt.10' }).filter).toEqual([{ field: 'qty', operator: '$lte', value: 10 }]);
+    expect(parse({ qty: 'not.gte.10' }).filter).toEqual([{ field: 'qty', operator: '$lt', value: 10 }]);
+    expect(parse({ qty: 'not.lt.10' }).filter).toEqual([{ field: 'qty', operator: '$gte', value: 10 }]);
+    expect(parse({ qty: 'not.lte.10' }).filter).toEqual([{ field: 'qty', operator: '$gt', value: 10 }]);
+  });
+
+  it('a negated condition inside or=()', () => {
+    expect(parse({ or: '(qty.not.gte.5,qty.eq.50)' }).search).toEqual({
+      $or: [{ qty: { $lt: 5 } }, { qty: { $eq: 50 } }],
+    });
+  });
+
+  it('a double-quoted value in or=() keeps its comma and parentheses and stays a string', () => {
+    expect(parse({ or: '(name.eq."Delta, comma",code.eq."12",note.like."*a(b),c*")' }).search).toEqual({
+      $or: [
+        { name: { $eq: 'Delta, comma' } },
+        { code: { $eq: '12' } },
+        { note: { $like: '%a(b),c%' } },
+      ],
+    });
+  });
+
+  it('a top-level filter value keeps its quotes (PostgREST quotes only inside lists and groups)', () => {
+    expect(parse({ name: 'eq."x"' }).filter).toEqual([{ field: 'name', operator: '$eq', value: '"x"' }]);
+  });
+});
