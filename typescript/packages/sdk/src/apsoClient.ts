@@ -1,7 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import { EntityClient, QueryBuilder } from './EntityClient';
-import { RequestQueryBuilder, CondOperator } from '@apso/crud-request';
-import { PostgrestQueryBuilder, PostgrestExecutor, PostgrestError } from './postgrest';
+import { PostgrestQueryBuilder, PostgrestExecutor, PostgrestError, entityParamsToPostgrest } from './postgrest';
 
 // ============================================================================
 // Types
@@ -157,7 +156,9 @@ class ApsoClient {
     method: string,
     url: string,
     data?: any,
-    params?: Record<string, any>
+    params?: Record<string, any>,
+    /** Extra request headers, and a look at the response headers of a success. */
+    extra?: { headers?: Record<string, string>; onHeaders?: (get: (name: string) => string | null) => void }
   ): Promise<T> {
     const maxAttempts = this.retryConfig?.attempts ?? 1;
     const delay = this.retryConfig?.delay ?? 1000;
@@ -172,7 +173,7 @@ class ApsoClient {
             console.log(`[ApsoClient][DEBUG] ${method.toUpperCase()} ${this.baseURL}${url}${queryString}`);
           }
 
-          const headers = await this.getHeaders();
+          const headers = { ...(await this.getHeaders()), ...extra?.headers };
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
@@ -200,13 +201,14 @@ class ApsoClient {
               throw new Error(`HTTP error! status: ${response.status}`);
             }
 
+            extra?.onHeaders?.(name => response.headers.get(name));
             return await response.json();
           } finally {
             clearTimeout(timeoutId);
           }
         } else if (this.httpClient === 'axios') {
           const axiosClient = await this.getAxiosInstance();
-          const config = { params, headers: await this.getHeaders() };
+          const config = { params, headers: { ...(await this.getHeaders()), ...extra?.headers } };
 
           if (this.debug) {
             const paramString = params ? '?' + new URLSearchParams(params as any).toString() : '';
@@ -226,6 +228,8 @@ class ApsoClient {
             throw new Error(`Unsupported HTTP method: ${method}`);
           }
 
+          const got = response.headers as Record<string, any> | undefined;
+          extra?.onHeaders?.(name => (got?.[name] === undefined ? null : String(got[name])));
           return response.data;
         }
 
@@ -366,7 +370,14 @@ class ApsoClient {
       }
     }
 
-    const data = await this.request<T>('get', `${resource}${queryString}`);
+    // Reads speak PostgREST. A list comes back as a bare array with the total
+    // in Content-Range; it is returned in the envelope findMany() always had.
+    let contentRange: string | null = null;
+    const body = await this.request<any>('get', `${resource}${queryString}`, undefined, undefined, {
+      headers: { 'X-Crud-Dialect': 'postgrest', Prefer: 'count=exact' },
+      onHeaders: get => { contentRange = get('content-range'); },
+    });
+    const data = (Array.isArray(body) && contentRange ? this.toPage(body, contentRange, params) : body) as T;
 
     if (useCache) {
       this.cache.set(cacheKey, { data, expiry: Date.now() + cacheDuration * 1000 });
@@ -403,68 +414,24 @@ class ApsoClient {
     this.cache.clear();
   }
 
+  /** Rows plus `Content-Range: 20-29/57` as `{ data, count, total, page, pageCount }`. */
+  private toPage(data: any[], contentRange: string, params?: QueryParams) {
+    const total = this.parseContentRangeCount(contentRange) ?? data.length;
+    const offset = parseInt(contentRange, 10) || 0; // '*/57' (empty page) -> 0
+    // No limit sent: the service applied its default, which a partial page reveals.
+    const limit = params?.limit ?? (total > data.length ? data.length : 0);
+    return {
+      data,
+      count: data.length,
+      total,
+      page: params?.page ?? (limit > 0 ? Math.floor((params?.offset ?? offset) / limit) + 1 : 1),
+      pageCount: limit > 0 ? Math.ceil(total / limit) : 1,
+    };
+  }
+
   private buildQueryParams(params?: QueryParams): string {
     if (!params) return '';
-
-    const qb = RequestQueryBuilder.create();
-
-    // Select/fields
-    if (params.fields) {
-      qb.select(params.fields);
-    }
-
-    // Filter
-    if (params.filter) {
-      Object.entries(params.filter).forEach(([field, value]) => {
-        if (typeof value === 'object' && value !== null) {
-          // Support operators: { field: { $eq: value } }
-          Object.entries(value).forEach(([op, v]) => {
-            qb.setFilter({ field, operator: op as CondOperator, value: v });
-          });
-        } else {
-          qb.setFilter({ field, operator: '$eq', value });
-        }
-      });
-    }
-
-    // OR
-    if (params.or) {
-      Object.entries(params.or).forEach(([field, value]) => {
-        if (typeof value === 'object' && value !== null) {
-          Object.entries(value).forEach(([op, v]) => {
-            qb.setOr({ field, operator: op as CondOperator, value: v });
-          });
-        } else {
-          qb.setOr({ field, operator: '$eq', value });
-        }
-      });
-    }
-
-    // Join
-    if (params.join) {
-      params.join.forEach((joinField) => {
-        qb.setJoin({ field: joinField });
-      });
-    }
-
-    // Sort
-    if (params.sort) {
-      Object.entries(params.sort).forEach(([field, order]) => {
-        qb.sortBy({ field, order: order as 'ASC' | 'DESC' });
-      });
-    }
-
-    // Limit, Offset, Page
-    if (params.limit !== undefined) qb.setLimit(params.limit);
-    if (params.offset !== undefined) qb.setOffset(params.offset);
-    if (params.page !== undefined) qb.setPage(params.page);
-
-    // Cache (resetCache)
-    if (params.cache !== undefined) {
-      if (params.cache) qb.resetCache();
-    }
-
-    const query = qb.query();
+    const query = entityParamsToPostgrest(params).toString();
     return query ? `?${query}` : '';
   }
 }
@@ -498,7 +465,7 @@ class ApsoClientFactory {
 
 export { ApsoClient, ApsoClientFactory, QueryBuilder };
 export { EntityClient, EntityQueryBuilder } from './EntityClient';
-export { PostgrestQueryBuilder, PostgrestFilterBuilder } from './postgrest';
+export { PostgrestQueryBuilder, PostgrestFilterBuilder, entityParamsToPostgrest } from './postgrest';
 export type { PostgrestResponse, PostgrestError, PostgrestExecutor } from './postgrest';
 
 /**

@@ -38,7 +38,6 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@apso/crud-request": "^1.0.0",
     "axios": "^1.18.1"
   },
   "devDependencies": {
