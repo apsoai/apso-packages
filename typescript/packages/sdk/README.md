@@ -4,7 +4,7 @@ A TypeScript SDK for interacting with Apso services via their OpenAPI-compliant 
 
 > This package lives in the `apso-packages` monorepo at `typescript/packages/sdk`.
 > It builds, tests, and publishes via the monorepo's auto-release pipeline and
-> uses `@apso/crud-request` (a workspace package) to build queries. Commit history
+> has no dependency on the other workspace packages. Commit history
 > prior to the move is at [apsoai/sdk](https://github.com/apsoai/sdk).
 
 ## Installation
@@ -71,46 +71,61 @@ try {
 The Supabase-style `from()` builder does not throw. It returns the same information on `error.message` and `error.requestId`.
 
 ## Usage
+
 ```typescript
-import { ApsoClientFactory, QueryBuilder } from '@apso/sdk';
+import { createClient } from '@apso/sdk';
 
-const config = {
-  baseURL: 'https://api.apso-service.com',
-  apiKey: 'your-api-key'
-};
+const client = createClient({ baseURL: 'https://api.example.com', apiKey: process.env.APSO_API_KEY });
 
-const client = ApsoClientFactory.getClient(config);
-
-const activeUsers = await client.entity('users')
-  .where({ status: { $eq: 'active' } })
-  .limit(10)
-  .get();
-
-// Advanced Query Example (NestJS CRUD compatible)
-const filtered = await client.entity('WorkspaceServices')
-  .where({ status: { $eq: 'Active' }, build_status: { $eq: 'Ready' } })
+const page = await client.entity('WorkspaceServices')
+  .select(['id', 'name'])
+  .where({ status: 'Active', build_status: { $in: ['Ready', 'Building'] } })
+  .join(['workspace||name'])
   .orderBy({ created_at: 'DESC' })
   .limit(10)
-  .page(1)
-  .cache(true)
-  .get();
-// This produces:
-// /WorkspaceServices?filter=status||$eq||Active&filter=build_status||$eq||Ready&sort=created_at,DESC&limit=10&page=1&cache=0
+  .page(2)
+  .findMany();
+// GET /WorkspaceServices?select=id,name,workspace(name)&status=eq.Active
+//       &build_status=in.(Ready,Building)&order=created_at.desc&limit=10&offset=10
+// page = { data: [...], count: 10, total: 57, page: 2, pageCount: 6 }
 
-// You can also use the low-level API:
-const response = await client.get('/WorkspaceServices', {
-  filter: {
-    status: { $eq: 'Active' },
-    build_status: { $eq: 'Ready' }
-  },
-  sort: { created_at: 'DESC' },
-  limit: 10,
-  page: 1,
-  cache: true
-});
+const one = await client.entity('WorkspaceServices').where({ id: 42 }).join(['workspace']).findOne();
 
-// This will generate a standards-compliant query string for NestJS CRUD APIs.
+// The low-level form takes the same parameters:
+const same = await client.get('/WorkspaceServices', { filter: { status: 'Active' }, limit: 10 });
 ```
+
+### What goes on the wire
+
+`entity()` and `get()` send the PostgREST query syntax (`X-Crud-Dialect: postgrest`, `Prefer: count=exact`). The service answers a list with a bare array and the total in the `Content-Range` header, and the SDK returns `{ data, count, total, page, pageCount }`.
+
+The service must run `@apso/crud` with PostgREST counts (the release that adds `Content-Range`). Against an older `@apso/crud` the rows are right but the result is the bare array with no total. A service still on `@nestjsx/crud` does not understand these queries: stay on `@apso/sdk` 1.4 for it.
+
+| You write | Sent as |
+|---|---|
+| `select(['id','name'])` | `select=id,name` |
+| `where({ status: 'active' })`, `{ $eq }` | `status=eq.active` |
+| `$ne`, `$gt`, `$gte`, `$lt`, `$lte` | `neq`, `gt`, `gte`, `lt`, `lte` |
+| `$cont`, `$starts`, `$ends`, `$excl` | `like.*x*`, `like.x*`, `like.*x`, `not.like.*x*` |
+| `$contL`, `$startsL`, `$endsL`, `$exclL`, `$eqL`, `$neL` | the same with `ilike` |
+| `$in`, `$notin`, `$notinL` | `in.(a,b)`, `not.in.(a,b)`, one `not.ilike` per value |
+| `$isnull`, `$notnull`, a `null` value | `is.null`, `not.is.null` |
+| `$between: [a, b]` | `gte.a` and `lte.b` |
+| `or({ a: 1, b: 2 })` | `or=(a.eq.1,b.eq.2)` |
+| `where(...)` together with `or(...)` | `or=(and(...filters),and(...ors))` |
+| `join(['posts', 'posts.comments', 'author\|\|name'])` | `select=*,posts(*,comments(*)),author(name)` |
+| `where({ 'posts.title': 'x' })` with `join(['posts'])` | `posts!inner(*)` and `posts.title=eq.x` (parents without a match are dropped, as before) |
+| `orderBy({ age: 'DESC' })`, `orderBy({ 'author.name': 'ASC' })` | `order=age.desc`, `order=author(name).asc` |
+| `limit(10).page(3)` | `limit=10&offset=20` |
+
+Changes from 1.4:
+
+- `findMany()` and `get()` on a list always return `{ data, count, total, page, pageCount }`. Before, a service without `alwaysPaginate` returned a bare array when no `page` or `offset` was sent.
+- `page()` needs `limit()`. Without it the call throws, because PostgREST pages by offset.
+- `$inL` and any operator not in the table throw. Before, an unknown operator was sent and the service compared for equality.
+- `cache(true)` still caches in the client. The `cache=0` query parameter is no longer sent.
+- In `like` and `ilike` patterns `*` is a wildcard, so a `*` in a `$cont` value matches anything.
+- A filter or sort on `relation.column` needs the relation in `join()`. The service answers 400 otherwise.
 
 ## Supabase-style queries (PostgREST dialect)
 
@@ -137,69 +152,3 @@ Filters: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `is`, `in`, `no
 `filter`, `match`, `or`. Modifiers: `order`, `limit`, `range`, `single`, `maybeSingle`.
 `contains`, `containedBy`, `overlaps`, `textSearch`, and `upsert` are not in the Apso
 dialect and throw a descriptive error.
-
-## Test Examples
-
-Here are some Jest test examples for the SDK:
-
-```typescript
-import { ApsoClientFactory } from '@apso/sdk';
-import axios from 'axios';
-import MockAdapter from 'axios-mock-adapter';
-
-describe('Apso SDK Client', () => {
-  const config = {
-    baseURL: 'https://api.example.com',
-    apiKey: 'test-api-key',
-    client: 'axios' as const
-  };
-  const client = ApsoClientFactory.getClient(config);
-  const mock = new MockAdapter(axios);
-
-  afterEach(() => {
-    mock.reset();
-  });
-
-  test('GET with filter and limit', async () => {
-    mock.onGet('/HopperLoads?filter=status||$eq||active&limit=10').reply(200, { data: 'mockData' });
-    const data = await client.entity('HopperLoads').where({ status: { $eq: 'active' } }).limit(10).get();
-    expect(data).toEqual({ data: 'mockData' });
-  });
-
-  test('GET with join and sort', async () => {
-    mock.onGet('/HopperLoads?join=relatedEntity&sort=created_at,ASC').reply(200, { data: 'mockData' });
-    const data = await client.entity('HopperLoads').join(['relatedEntity']).orderBy({ created_at: 'ASC' }).get();
-    expect(data).toEqual({ data: 'mockData' });
-  });
-
-  test('POST with data', async () => {
-    mock.onPost('/HopperLoads', { name: 'New Load' }).reply(201, { data: 'createdData' });
-    const data = await client.entity('HopperLoads').post({ name: 'New Load' });
-    expect(data).toEqual({ data: 'createdData' });
-  });
-
-  test('PUT with data', async () => {
-    mock.onPut('/HopperLoads', { name: 'Updated Load' }).reply(200, { data: 'updatedData' });
-    const data = await client.entity('HopperLoads').put({ name: 'Updated Load' });
-    expect(data).toEqual({ data: 'updatedData' });
-  });
-
-  test('DELETE', async () => {
-    mock.onDelete('/HopperLoads').reply(200, { message: 'Deleted successfully' });
-    const data = await client.entity('HopperLoads').delete();
-    expect(data).toEqual({ message: 'Deleted successfully' });
-  });
-
-  test('GET with offset and page', async () => {
-    mock.onGet('/HopperLoads?offset=5&page=2').reply(200, { data: 'mockData' });
-    const data = await client.entity('HopperLoads').offset(5).page(2).get();
-    expect(data).toEqual({ data: 'mockData' });
-  });
-
-  test('GET with select and cache', async () => {
-    mock.onGet('/HopperLoads?fields=name,age&cache=0').reply(200, { data: 'mockData' });
-    const data = await client.entity('HopperLoads').select(['name', 'age']).cache(true).get();
-    expect(data).toEqual({ data: 'mockData' });
-  });
-});
-```
