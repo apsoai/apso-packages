@@ -18,6 +18,7 @@ each package checks whether its directory changed since that package's last rele
 | `@apso/crud` | `typescript/packages/crud/` | `ts-crud-vX.Y.Z` | npm |
 | `@apso/sdk` | `typescript/packages/sdk/` | `ts-sdk-vX.Y.Z` | npm |
 | `@apso/schema-tools` | `typescript/packages/schema-tools/` | `ts-schema-tools-vX.Y.Z` | npm |
+| `@apso/logging` | `typescript/packages/logging/` | `ts-logging-vX.Y.Z` | npm |
 | `apso-domain-events` | `python/packages/domain-events/` | `py-domain-events-vX.Y.Z` | PyPI |
 | `domainevents` (Go) | `go/domainevents/` | `go/domainevents/vX.Y.Z` | Go proxy (tag only) |
 
@@ -42,7 +43,7 @@ and pushed with the default token, so it never re-triggers the workflow.
 
 - **npm:** **Trusted Publishing** (GitHub OIDC), no token. On npmjs.com, for *each* package
   (`@apso/domain-events`, `@apso/crud-core`, `@apso/crud-request`, `@apso/postgrest-request`,
-  `@apso/crud-typeorm`, `@apso/crud`, `@apso/sdk`, `@apso/schema-tools`) → Settings → Trusted Publisher → GitHub
+  `@apso/crud-typeorm`, `@apso/crud`, `@apso/sdk`, `@apso/schema-tools`, `@apso/logging`) → Settings → Trusted Publisher → GitHub
   Actions: organization `apsoai`, repository `apso-packages`, workflow filename
   `auto-release.yml`, no environment, with npm publish allowed. Once a release succeeds via
   OIDC, Publishing access can be set to disallow tokens. The publish step needs
