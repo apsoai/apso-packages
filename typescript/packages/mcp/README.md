@@ -91,6 +91,38 @@ Set `resource` to the public URL of the endpoint. Without it the URL is built fr
 
 Your identity provider has to support what MCP clients need to register themselves: Client ID Metadata Documents, or Dynamic Client Registration, or a client you registered by hand.
 
+## Telling an MCP call from a REST call
+
+A tool call reaches your route as an ordinary request. To tell the two apart, read `req.apso.mcp` in a handler, guard or interceptor:
+
+```ts
+import { McpOrigin } from '@apso/mcp';
+
+const mcp: McpOrigin | undefined = req.apso?.mcp;
+// { tool: 'approve_invoice', clientId: 'claude-web' } for a tool call, undefined for a REST call
+```
+
+`@apso/mcp` sets the property on the request object it builds in memory for the tool call. A REST caller can only send headers and a body, so it cannot set it.
+
+`clientId` is the client application the caller's token was issued to. It is present when `McpAuth.verify` resolves to an object with a string `clientId`, for example `{ clientId: claims.azp }`.
+
+`req.apso` is the property Apso libraries share. Your auth guard writes the caller to `req.apso.caller` and `@apso/logging` reads both, so set fields on it and do not replace the object:
+
+```ts
+req.apso = { ...req.apso, caller: { type: 'user', userId, tenantId } };
+```
+
+## Browser-based MCP clients (CORS)
+
+An MCP client that runs in a browser on another origin needs the endpoint to answer its preflight request and to let it read the sign-in challenge.
+
+- The allowed origins default to your app's own setting, the comma-separated `ALLOWED_ORIGINS` environment variable. With it unset, no browser origin is allowed.
+- To allow other origins for MCP only, pass them: `mountMcp(app, document, { allowedOrigins: ['https://agent.example.com'] })`. `'*'` allows every origin.
+- For an allowed origin the endpoint answers `OPTIONS`, allows the headers the preflight asks for, and exposes `WWW-Authenticate`, `Mcp-Session-Id`, `Mcp-Protocol-Version` and `X-Request-Id` to the page.
+- A request with an `Origin` header that is not allowed gets `403`, as the MCP transport specification requires. Clients that are not browsers send no `Origin` header and are not affected.
+
+`Access-Control-Allow-Credentials` is not set: browser MCP clients send the token in the `Authorization` header, not a cookie.
+
 ## Limits
 
 - Without `MCP_AUTH`, listing tools is open, like the OpenAPI document it is built from. Calling a tool is always checked by the route's guards.
