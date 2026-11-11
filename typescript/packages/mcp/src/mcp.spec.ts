@@ -12,10 +12,11 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UnauthorizedException,
 } from '@nestjs/common';
 import { APP_GUARD, NestFactory } from '@nestjs/core';
-import { ApiProperty, ApiQuery, DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { ApiOperation, ApiProperty, ApiQuery, DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { MCP_AUTH, McpAuth, McpTool, mountMcp, toolsFromDocument } from './index';
@@ -46,6 +47,32 @@ class NotesController {
   }
 }
 
+// Documented the way @apso/crud documents a PostgREST-only list route: one
+// parameter per column and an exploded object for filters on embedded rows.
+@Controller('posts')
+class PostsController {
+  @Get()
+  @ApiOperation({ summary: 'Get many Post', description: 'Filter with one parameter per column, value op.value.' })
+  @ApiQuery({ name: 'select', required: false, schema: { type: 'string' } })
+  @ApiQuery({ name: 'limit', required: false, schema: { type: 'integer' } })
+  @ApiQuery({ name: 'views', required: false, description: 'Filter, op.value: gte.5', schema: { type: 'string' } })
+  @ApiQuery({
+    name: 'embedded',
+    required: false,
+    style: 'form',
+    explode: true,
+    schema: { type: 'object', additionalProperties: { type: 'string' } },
+  } as any)
+  @McpTool({ name: 'list_posts' })
+  list(@Req() req: any, @Res({ passthrough: true }) res: any) {
+    if (req.query.limit === undefined) {
+      res.status(206);
+      res.setHeader('Content-Range', '0-4/6');
+    }
+    return [{ url: req.url, query: req.query }];
+  }
+}
+
 // Stands in for the app's real auth guard: the tool call must go through it.
 class TokenGuard implements CanActivate {
   canActivate(context: ExecutionContext) {
@@ -56,7 +83,7 @@ class TokenGuard implements CanActivate {
   }
 }
 
-@Module({ controllers: [NotesController], providers: [{ provide: APP_GUARD, useClass: TokenGuard }] })
+@Module({ controllers: [NotesController, PostsController], providers: [{ provide: APP_GUARD, useClass: TokenGuard }] })
 class AppModule {}
 
 describe('@apso/mcp', () => {
@@ -85,7 +112,7 @@ describe('@apso/mcp', () => {
 
   test('lists only the marked routes, with schemas from the route', async () => {
     const { tools } = await (await connect()).listTools();
-    expect(tools.map((tool) => tool.name).sort()).toEqual(['list_notes', 'publish_note']);
+    expect(tools.map((tool) => tool.name).sort()).toEqual(['list_notes', 'list_posts', 'publish_note']);
     const publish = tools.find((tool) => tool.name === 'publish_note')!;
     expect(publish.inputSchema.required).toEqual(['id', 'body']);
     expect((publish.inputSchema.properties as any).body.properties.title.type).toBe('string');
@@ -136,6 +163,33 @@ describe('@apso/mcp', () => {
   test('query arguments reach the route', async () => {
     const result: any = await (await connect('good')).callTool({ name: 'list_notes', arguments: { q: 'a b' } });
     expect(JSON.parse(result.content[0].text)).toEqual([{ id: '1', q: 'a b' }]);
+  });
+
+  test('a column filter and an embedded filter reach the route as PostgREST query parameters', async () => {
+    const client = await connect('good');
+    const tool = (await client.listTools()).tools.find((candidate) => candidate.name === 'list_posts')!;
+    expect(tool.description).toBe('Get many Post. Filter with one parameter per column, value op.value.');
+    expect((tool.inputSchema.properties as any).views).toEqual({ type: 'string', description: 'Filter, op.value: gte.5' });
+    expect((tool.inputSchema.properties as any).embedded).toEqual({ type: 'object', additionalProperties: { type: 'string' } });
+
+    const result: any = await client.callTool({
+      name: 'list_posts',
+      arguments: { select: 'id,comments!inner(id)', views: 'gte.100', embedded: { 'comments.likes': 'gt.5' }, limit: 2, unknown: 'dropped' },
+    });
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toHaveLength(1);
+    expect(JSON.parse(result.content[0].text)[0].query).toEqual({
+      select: 'id,comments!inner(id)',
+      views: 'gte.100',
+      'comments.likes': 'gt.5',
+      limit: '2',
+    });
+  });
+
+  test('a 206 with Content-Range tells the model the result is partial', async () => {
+    const result: any = await (await connect('good')).callTool({ name: 'list_posts', arguments: {} });
+    expect(result.isError).toBeFalsy();
+    expect(result.content[1].text).toBe('Partial result: rows 0-4 of 6. Send limit and offset for the rest.');
   });
 
   test('an untyped body and a duplicate name are boot errors', () => {

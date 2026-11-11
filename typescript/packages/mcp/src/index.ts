@@ -36,6 +36,12 @@ export interface McpRouteTool {
   /** OpenAPI path template, e.g. /invoices/{id} */
   path: string;
   query: string[];
+  /**
+   * Query arguments that are objects sent one key per query parameter (OpenAPI
+   * `style: form, explode: true`): `{ "posts.title": "eq.x" }` goes out as
+   * `?posts.title=eq.x`.
+   */
+  spread: string[];
 }
 
 /**
@@ -156,13 +162,17 @@ export function toolsFromDocument(document: OpenAPIObject): McpRouteTool[] {
       const properties: Record<string, any> = {};
       const required: string[] = [];
       const query: string[] = [];
+      const spread: string[] = [];
       for (const parameter of [...((item as any).parameters ?? []), ...(operation.parameters ?? [])]) {
         if (parameter.in !== 'path' && parameter.in !== 'query') continue;
+        const schema = inline(document, parameter.schema ?? {});
         properties[parameter.name] = {
-          ...inline(document, parameter.schema ?? {}),
+          ...schema,
           ...(parameter.description ? { description: parameter.description } : {}),
         };
-        if (parameter.in === 'query') query.push(parameter.name);
+        // An object in the query is exploded by default (style: form).
+        const exploded = schema.type === 'object' && parameter.explode !== false && (parameter.style ?? 'form') === 'form';
+        if (parameter.in === 'query') (exploded ? spread : query).push(parameter.name);
         if (parameter.required) required.push(parameter.name);
       }
 
@@ -179,7 +189,8 @@ export function toolsFromDocument(document: OpenAPIObject): McpRouteTool[] {
 
       tools.push({
         name,
-        description: options.description ?? operation.summary ?? operation.description ?? route,
+        // The operation description is where a route explains its query syntax.
+        description: options.description ?? ([operation.summary, operation.description].filter(Boolean).join('. ') || route),
         inputSchema: { type: 'object', properties, required },
         annotations: {
           readOnlyHint: method === 'get',
@@ -188,6 +199,7 @@ export function toolsFromDocument(document: OpenAPIObject): McpRouteTool[] {
         method: method.toUpperCase(),
         path,
         query,
+        spread,
       });
     }
   }
@@ -205,7 +217,7 @@ function dispatchInMemory(
   headers: Record<string, string>,
   origin: McpOrigin,
   body?: unknown,
-): Promise<{ statusCode: number; payload: string }> {
+): Promise<{ statusCode: number; payload: string; contentRange?: string }> {
   return new Promise((resolve) => {
     const req = new IncomingMessage(new Socket());
     (req as any).apso = { mcp: origin };
@@ -234,7 +246,12 @@ function dispatchInMemory(
     res.end = ((chunk?: unknown, encoding?: unknown) => {
       collect(chunk, encoding);
       res.emit('finish');
-      resolve({ statusCode: res.statusCode, payload: Buffer.concat(chunks).toString('utf8') });
+      const contentRange = res.getHeader('content-range');
+      resolve({
+        statusCode: res.statusCode,
+        payload: Buffer.concat(chunks).toString('utf8'),
+        ...(contentRange ? { contentRange: String(contentRange) } : {}),
+      });
       return res;
     }) as any;
     handler(req, res);
@@ -264,6 +281,13 @@ async function callTool(
     if (value === undefined || value === null) continue;
     for (const item of Array.isArray(value) ? value : [value]) search.append(key, String(item));
   }
+  for (const key of tool.spread) {
+    const value = args[key];
+    if (!value || typeof value !== 'object') continue;
+    for (const [name, item] of Object.entries(value)) {
+      if (item !== undefined && item !== null) search.append(name, String(item));
+    }
+  }
   const qs = search.toString();
 
   const headers: Record<string, string> = { accept: 'application/json' };
@@ -272,10 +296,16 @@ async function callTool(
   }
 
   const response = await dispatchInMemory(dispatch, tool.method, qs ? `${path}?${qs}` : path, headers, { tool: tool.name, ...(clientId ? { clientId } : {}) }, args.body);
-  return {
-    content: [{ type: 'text' as const, text: response.payload || `HTTP ${response.statusCode}` }],
-    isError: response.statusCode >= 400,
-  };
+  const content = [{ type: 'text' as const, text: response.payload || `HTTP ${response.statusCode}` }];
+  // 206: the route returned part of the matching rows. The model only sees
+  // the body, so say it, or a default page size reads as the whole result.
+  if (response.statusCode === 206 && response.contentRange) {
+    content.push({
+      type: 'text' as const,
+      text: `Partial result: rows ${response.contentRange.replace('/', ' of ')}. Send limit and offset for the rest.`,
+    });
+  }
+  return { content, isError: response.statusCode >= 400 };
 }
 
 /** The MCP endpoint's public URL: the configured one, else what the request used. */
