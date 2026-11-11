@@ -138,6 +138,11 @@ export class PostgrestFilterBuilder<T> implements PromiseLike<PostgrestResponse<
     return this;
   }
 
+  /** The query built so far, as it goes on the wire. */
+  toSearchParams(): URLSearchParams {
+    return this.search;
+  }
+
   // --- await ----------------------------------------------------------------
   then<R1 = PostgrestResponse<T>, R2 = never>(
     onfulfilled?: ((v: PostgrestResponse<T>) => R1 | PromiseLike<R1>) | null,
@@ -222,4 +227,152 @@ export class PostgrestQueryBuilder {
   upsert(): never {
     throw new Error('upsert() is not supported by the Apso PostgREST dialect yet. Use insert() or update().');
   }
+}
+
+// ---------------------------------------------------------------------------
+// entity() / get() query params -> PostgREST
+// ---------------------------------------------------------------------------
+
+/** The `entity()` / `get()` query shape (kept from the nestjsx days). */
+export interface EntityQueryParams {
+  fields?: string[];
+  filter?: Record<string, any>;
+  or?: Record<string, any>;
+  join?: string[];
+  sort?: Record<string, 'ASC' | 'DESC'>;
+  limit?: number;
+  offset?: number;
+  page?: number;
+  cache?: boolean;
+}
+
+const never: PostgrestExecutor = async () => {
+  throw new Error('not executed');
+};
+const scratch = () => new PostgrestQueryBuilder('', never).select<any>();
+
+/** One `{ field: { $op: value } }` entry, applied through the from() builder. */
+function applyOperator(b: PostgrestFilterBuilder<any>, field: string, op: string, v: any): void {
+  switch (op) {
+    case '$eq': v === null ? b.is(field, null) : b.eq(field, v); break;
+    case '$ne': v === null ? b.not(field, 'is', null) : b.neq(field, v); break;
+    case '$gt': b.gt(field, v); break;
+    case '$gte': b.gte(field, v); break;
+    case '$lt': b.lt(field, v); break;
+    case '$lte': b.lte(field, v); break;
+    case '$starts': b.like(field, `${v}*`); break;
+    case '$ends': b.like(field, `*${v}`); break;
+    case '$cont': b.like(field, `*${v}*`); break;
+    case '$excl': b.not(field, 'like', `*${v}*`); break;
+    case '$startsL': b.ilike(field, `${v}*`); break;
+    case '$endsL': b.ilike(field, `*${v}`); break;
+    case '$contL': b.ilike(field, `*${v}*`); break;
+    case '$exclL': b.not(field, 'ilike', `*${v}*`); break;
+    case '$eqL': b.ilike(field, String(v)); break;
+    case '$neL': b.not(field, 'ilike', v); break;
+    case '$in': b.in(field, v); break;
+    case '$notin': {
+      // Reuse in()'s list quoting, then negate it.
+      const list = scratch().in(field, v).toSearchParams().get(field) as string;
+      b.filter(field, 'not', list);
+      break;
+    }
+    case '$notinL': for (const item of v) b.not(field, 'ilike', item); break;
+    case '$isnull': b.is(field, null); break;
+    case '$notnull': b.not(field, 'is', null); break;
+    case '$between': b.gte(field, v[0]).lte(field, v[1]); break;
+    default:
+      throw new Error(
+        `Operator '${op}' on '${field}' has no PostgREST form in entity()/get(). ` +
+          (op === '$inL' ? "Use from(table).or('col.ilike.a,col.ilike.b')." : 'Use the from() builder.'),
+      );
+  }
+}
+
+/** `{ field: value | { $op: value } }` as [column, 'op.value'] pairs. */
+function conditions(where: Record<string, any> | undefined): Array<[string, string]> {
+  const b = scratch();
+  for (const [field, value] of Object.entries(where ?? {})) {
+    if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+      for (const [op, v] of Object.entries(value)) applyOperator(b, field, op, v);
+    } else {
+      applyOperator(b, field, '$eq', value);
+    }
+  }
+  return [...b.toSearchParams().entries()];
+}
+
+/** `col`, `op.value` as one condition inside or=(...): a value with a reserved character is quoted. */
+function grouped([column, spec]: [string, string]): string {
+  const m = /^((?:not\.)?[a-z]+)\.([\s\S]*)$/.exec(spec);
+  if (!m || /(^|\.)(in|is)$/.test(m[1]) || !/[,()"]/.test(m[2])) return `${column}.${spec}`;
+  return `${column}.${m[1]}."${m[2]}"`;
+}
+
+/**
+ * Serialize entity()/get() query params as a PostgREST query, through the
+ * from() builder. nestjsx semantics are kept where PostgREST has a form:
+ * a filter on a joined column drops parents (the embed becomes !inner), and
+ * `or` next to `filter` means (all filters) OR (all ors).
+ */
+export function entityParamsToPostgrest(params: EntityQueryParams): URLSearchParams {
+  const filters = conditions(params.filter);
+  const ors = conditions(params.or);
+
+  // join: ['posts', 'posts.comments', 'author||name'] -> posts(*,comments(*)),author(name)
+  type Embed = { columns: string[]; children: Map<string, Embed>; inner: boolean };
+  const root: Embed = { columns: [], children: new Map(), inner: false };
+  const embedAt = (path: string): Embed => {
+    let node = root;
+    for (const segment of path.split('.')) {
+      if (!node.children.has(segment)) node.children.set(segment, { columns: [], children: new Map(), inner: false });
+      node = node.children.get(segment) as Embed;
+    }
+    return node;
+  };
+  for (const join of params.join ?? []) {
+    const [path, columns] = join.split('||');
+    const node = embedAt(path);
+    if (columns) node.columns = columns.split(',');
+  }
+  const joined = (path: string) => path.split('.').reduce<Embed | undefined>((n, s) => n?.children.get(s), root);
+  // A filter on a joined column was a WHERE in nestjsx: parents without a match are dropped.
+  for (const [column] of [...filters, ...ors]) {
+    const dot = column.lastIndexOf('.');
+    if (dot === -1 || !joined(column.slice(0, dot))) continue;
+    const segments = column.slice(0, dot).split('.');
+    segments.forEach((_, i) => { (joined(segments.slice(0, i + 1).join('.')) as Embed).inner = true; });
+  }
+  const render = (node: Embed): string[] =>
+    [...node.children].map(([name, child]) =>
+      `${name}${child.inner ? '!inner' : ''}(${[child.columns.length ? child.columns.join(',') : '*', ...render(child)].join(',')})`,
+    );
+  const embeds = render(root);
+  const columns = params.fields?.length ? params.fields.join(',') : embeds.length ? '*' : '';
+  const select = [columns, ...embeds].filter(Boolean).join(',');
+
+  const b = new PostgrestQueryBuilder('', never).select<any>(select || '*');
+  if (ors.length === 0) {
+    for (const [column, spec] of filters) b.toSearchParams().append(column, spec);
+  } else if (filters.length === 0) {
+    b.or(ors.map(grouped).join(','));
+  } else {
+    b.or(`and(${filters.map(grouped).join(',')}),and(${ors.map(grouped).join(',')})`);
+  }
+
+  for (const [field, direction] of Object.entries(params.sort ?? {})) {
+    const dot = field.lastIndexOf('.');
+    b.order(dot === -1 ? field : `${field.slice(0, dot)}(${field.slice(dot + 1)})`, { ascending: direction !== 'DESC' });
+  }
+
+  if (params.limit !== undefined) b.limit(params.limit);
+  if (params.offset !== undefined) {
+    b.toSearchParams().set('offset', String(params.offset));
+  } else if (params.page !== undefined) {
+    if (params.limit === undefined) {
+      throw new Error('page() needs limit(): PostgREST pages by offset, and offset = (page - 1) * limit.');
+    }
+    b.toSearchParams().set('offset', String((params.page - 1) * params.limit));
+  }
+  return b.toSearchParams();
 }
