@@ -7,10 +7,41 @@ describe('PostgrestRequestParser', () => {
     it('parses plain columns into fields', () => {
       expect(p.parse({ select: 'id,name,age' }).parsed.fields).toEqual(['id', 'name', 'age']);
     });
-    it('strips embeds and rename/cast for the core field list', () => {
-      // rel(...) is an embed (#50); alias:col keeps the column; col::text drops the cast
-      expect(p.parse({ select: 'id,alias:name,age::text,posts(id)' }).parsed.fields)
-        .toEqual(['id', 'name', 'age']);
+    it('strips embeds and renames for the core field list', () => {
+      // rel(...) is an embed (#50); alias:col keeps the column
+      expect(p.parse({ select: 'id,alias:name,posts(id)' }).parsed.fields)
+        .toEqual(['id', 'name']);
+    });
+    it.each([
+      ['id,age::text', 'Casts'],
+      ['id,meta->>color', 'JSON paths'],
+      ['id,meta->color', 'JSON paths'],
+      ['count()', 'Aggregate functions'],
+      ['views.sum()', 'Aggregate functions'],
+      ['total:views.sum()::int', 'Aggregate functions'],
+      ['title,...author(name)', 'Spreading an embed'],
+      ['name,items:posts(title)', 'Embed aliases'],
+      ['name,posts()', 'Empty embeds'],
+      ['name,posts(t:title)', 'Renaming a column inside an embed'],
+    ])('refuses select=%s by name (%s)', (select, feature) => {
+      expect(() => p.parse({ select })).toThrow(feature);
+      expect(() => p.parse({ select })).toThrow('not supported');
+    });
+    it('refuses a filter or order on a relation that is not embedded', () => {
+      expect(() => p.parse({ 'posts.title': 'eq.x' })).toThrow("refers to 'posts', which is not embedded");
+      expect(() => p.parse({ order: 'author(name).desc' })).toThrow('not embedded');
+      expect(() => p.parse({ select: '*,posts(*)', 'posts.title': 'eq.x', order: 'posts(title).desc' })).not.toThrow();
+    });
+    it('refuses embedded order/limit/offset and negated groups by name', () => {
+      expect(() => p.parse({ select: '*,posts(*)', 'posts.order': 'title.desc' })).toThrow('top level only');
+      expect(() => p.parse({ 'not.and': '(a.eq.1,b.eq.2)' })).toThrow('Negated groups');
+    });
+    it("applies the controller's query.filter and the route params in the search tree", () => {
+      const scoped = new PostgrestRequestParser({ query: { filter: { deleted: false } } });
+      const parsed = scoped.parse({ views: 'gt.1' }, { id: '7' }, { filter: { tenantId: 3 } }).parsed;
+      expect(parsed.search).toEqual({
+        $and: [{ tenantId: 3 }, { id: { $eq: 7 } }, { deleted: false }, { views: { $gt: 1 } }],
+      });
     });
     it('records alias:column renames in fieldAliases keyed by column (#57)', () => {
       const parsed = p.parse({ select: 'id,name:title' }).parsed;
@@ -155,11 +186,6 @@ describe('PostgrestRequestParser', () => {
         { field: 'roles', select: ['character'] },
         { field: 'roles.films', select: ['title', 'year'] },
       ]);
-    });
-    it('aliased embed keeps the relation name as the join path', () => {
-      const parsed = p.parse({ select: 'name,director:directors(first_name)' }).parsed;
-      expect(parsed.fields).toEqual(['name']);
-      expect(parsed.join).toEqual([{ field: 'directors', select: ['first_name'] }]);
     });
     it('rel(*) → full join (no explicit select), like a nestjsx join with no column list', () => {
       const parsed = p.parse({ select: 'title,actors(*)' }).parsed;

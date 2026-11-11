@@ -36,6 +36,9 @@ module.exports = {
     '^@apso/crud-request$': `${PKGS}/crud-request/src/index.ts`,
     '^@apso/crud-typeorm$': `${PKGS}/crud-typeorm/src/index.ts`,
     '^@apso/postgrest-request$': `${PKGS}/postgrest-request/src/index.ts`,
+    // @apso/mcp joins the repo in its own PR; test/mcp.spec.ts skips until then.
+    '^@apso/mcp$': `${PKGS}/mcp/src/index.ts`,
+    '^@modelcontextprotocol/sdk/(.*)$': `${nm('@modelcontextprotocol/sdk')}/dist/cjs/$1`,
     '^typeorm$': nm('typeorm'),
     '^@nestjsx/crud$': nm('@nestjsx/crud'),
     '^@nestjsx/crud-request$': nm('@nestjsx/crud-request'),
