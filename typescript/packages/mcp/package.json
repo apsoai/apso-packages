@@ -1,6 +1,6 @@
 {
   "name": "@apso/mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Expose NestJS routes as MCP tools with a decorator. Every tool call runs through the API's own HTTP pipeline.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
