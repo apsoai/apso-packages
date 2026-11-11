@@ -31,10 +31,11 @@ PKGS=(
   "CRUD|typescript/packages/crud|ts-crud-v|npm|@apso/crud"
   "SDK|typescript/packages/sdk|ts-sdk-v|npm|@apso/sdk"
   "SCHEMATOOLS|typescript/packages/schema-tools|ts-schema-tools-v|npm|@apso/schema-tools"
+  "LOGGING|typescript/packages/logging|ts-logging-v|npm|@apso/logging"
   "PY|python/packages/domain-events|py-domain-events-v|pypi|apso-domain-events"
   "GO|go/domainevents|go/domainevents/v|go|"
 )
-ALL_IDS="TS CRUDCORE CRUDREQ PGREQ CRUDTORM CRUD SDK SCHEMATOOLS PY GO"
+ALL_IDS="TS CRUDCORE CRUDREQ PGREQ CRUDTORM CRUD SDK SCHEMATOOLS LOGGING PY GO"
 
 bump_semver() { # <x.y.z> <major|minor|patch>
   local IFS=.; read -r MA MI PA <<<"$1"
