@@ -221,7 +221,7 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   }
 
   async createOne(req: ParsedRequest, dto: DeepPartial<T>): Promise<CreateOneResponse<T>> {
-    const entity = this.repository.create(this.withAuthPersist(req, dto) as any);
+    const entity = this.repository.create(this.forCreate(req, dto) as any);
     // Echo the saved entity as-is. This is an INTENDED divergence from
     // @nestjsx/crud (#44): on a timestamp column, nestjsx re-hydrates the
     // echoed value through the server's local timezone, so a posted UTC
@@ -237,7 +237,7 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     if (!dto || !Array.isArray(dto.bulk) || dto.bulk.length === 0) {
       throw new BadRequestException(['bulk should not be empty']);
     }
-    const bulk = (dto.bulk as any[]).map(item => this.withAuthPersist(req, item));
+    const bulk = (dto.bulk as any[]).map(item => this.forCreate(req, item));
     const entities = this.repository.create(bulk);
     // Echo the saved entities as-given (same as createOne — #44 timestamp
     // divergence from nestjsx is intended, not replicated).
@@ -286,7 +286,27 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   protected withAuthPersist<D>(req: ParsedRequest, dto: D): D {
     const persist = req.parsed.authPersist;
     if (!persist || typeof persist !== 'object') return dto;
-    return { ...dto, ...persist };
+    const out: any = { ...dto, ...persist };
+    // TypeORM saves a relation object in place of its join column. A relation
+    // whose column is pinned is dropped, so the pinned value is the one saved.
+    for (const relation of this.repository.metadata?.relations ?? []) {
+      if (relation.joinColumns.some(column => column.propertyName in persist)) {
+        delete out[relation.propertyName];
+      }
+    }
+    return out;
+  }
+
+  /**
+   * A create body with auth.persist applied. When persist pins a field, the
+   * body's primary key is dropped: save() updates the row a primary key
+   * names, and that row may not be one the auth filter allows.
+   */
+  protected forCreate<D>(req: ParsedRequest, dto: D): D {
+    const body = this.withAuthPersist(req, dto);
+    const persist = req.parsed.authPersist;
+    const pins = persist && typeof persist === 'object' && Object.keys(persist).length > 0;
+    return pins ? this.stripPrimaryKeys(body) : body;
   }
 
   /** Remove primary-key fields from a mutation body (nestjsx behavior). */
