@@ -145,6 +145,11 @@
       "ok": true
     },
     {
+      "id": "pg-non-allowlisted-embed",
+      "mode": "conformance",
+      "ok": true
+    },
+    {
       "id": "eqv-eq",
       "mode": "equivalence",
       "ok": true
@@ -211,11 +216,6 @@
     },
     {
       "id": "acc-scope-cannot-widen",
-      "mode": "access",
-      "ok": true
-    },
-    {
-      "id": "acc-non-allowlisted-embed",
       "mode": "access",
       "ok": true
     }

@@ -27,7 +27,9 @@ import {
   CRUD_CONTROLLER_METADATA,
   CrudValidationGroups
 } from '@apso/crud-core';
+import { getMetadataArgsStorage } from 'typeorm';
 import { CrudRequestInterceptor } from './crud-request.interceptor';
+import { isPostgrestOnly, onAcceptedDialectsChange } from './dialect';
 
 /**
  * Main CRUD decorator that configures a controller class for CRUD operations
@@ -86,12 +88,16 @@ function generateCrudRoutes(target: any, options: CrudControllerOptions) {
             pageCount: { type: 'number' }
           }
         }
-      }),
-      // Add query parameter documentation
-      ...generateQueryDocumentation(options)
+      })
     ];
 
-    applyMethodDecorators(target, 'getMany', getManyDecorators);
+    const getManyRoute = applyMethodDecorators(target, 'getMany', getManyDecorators);
+    // The query parameters depend on the accepted dialects, which the app can
+    // set after this decorator has run (setAcceptedDialects), so they are
+    // written now and again on every change.
+    const document = () => documentRead(target, getManyRoute, options, true);
+    document();
+    onAcceptedDialectsChange(document);
   }
 
   // GET One - GET /:id
@@ -116,7 +122,10 @@ function generateCrudRoutes(target: any, options: CrudControllerOptions) {
       ApiResponse({ status: 404, description: `${entityName} not found` })
     ];
 
-    applyMethodDecorators(target, 'getOne', getOneDecorators);
+    const getOneRoute = applyMethodDecorators(target, 'getOne', getOneDecorators);
+    const document = () => documentRead(target, getOneRoute, options, false);
+    document();
+    onAcceptedDialectsChange(document);
   }
 
   // POST Create - POST /
@@ -293,87 +302,179 @@ function generateCrudRoutes(target: any, options: CrudControllerOptions) {
   }
 }
 
+/** @nestjs/swagger's metadata key for a handler's documented parameters. */
+const API_PARAMETERS = 'swagger/apiParameters';
+const DOCUMENTED_QUERY = 'apso:crud:documented-query';
+
 /**
- * Generate query parameter documentation for GET routes
+ * Write the query documentation of a read route (list or read by id) for the
+ * dialects the controller accepts now. Replaces what an earlier call wrote and
+ * leaves parameters documented by anyone else alone.
  */
-function generateQueryDocumentation(options: CrudControllerOptions) {
-  const docs = [];
+function documentRead(target: any, routeName: string | undefined, options: CrudControllerOptions, list: boolean) {
+  const proto = target.prototype;
+  if (!routeName) return;
+  const handler = proto[routeName];
+  if (typeof handler !== 'function') return;
+  const descriptor = Object.getOwnPropertyDescriptor(proto, routeName) || { value: handler };
 
-  // Fields selection
-  docs.push(
-    ApiQuery({
-      name: 'fields',
-      required: false,
-      description: 'Comma-separated list of fields to select',
-      example: 'name,status,id'
-    })
+  const postgrest = isPostgrestOnly(options.dialects as any);
+  const docs: Array<{ name: string } & Record<string, any>> = postgrest
+    ? postgrestQueryParameters(options, list)
+    : list
+      ? NESTJSX_QUERY_PARAMETERS.filter(p => p.name !== 'join' || options.query?.join)
+      : [];
+
+  const mine: string[] = Reflect.getMetadata(DOCUMENTED_QUERY, handler) || [];
+  const kept = (Reflect.getMetadata(API_PARAMETERS, handler) || []).filter(
+    (p: any) => !(p.in === 'query' && mine.includes(p.name)),
   );
+  Reflect.defineMetadata(API_PARAMETERS, kept, handler);
+  Reflect.defineMetadata(DOCUMENTED_QUERY, docs.map(d => d.name), handler);
+  docs.forEach(d => ApiQuery({ required: false, ...d } as any)(proto, routeName, descriptor));
 
-  // Filtering
-  docs.push(
-    ApiQuery({
-      name: 'filter',
-      required: false,
-      description: 'Filter conditions (field||operator||value)',
-      example: 'status||$eq||Active'
-    })
-  );
-
-  // Search
-  docs.push(
-    ApiQuery({
-      name: 's',
-      required: false,
-      description: 'Complex search conditions (JSON)',
-      example: '{"name": {"$contL": "John"}}'
-    })
-  );
-
-  // Sorting
-  docs.push(
-    ApiQuery({
-      name: 'sort',
-      required: false,
-      description: 'Sort conditions (field,order)',
-      example: 'name,ASC'
-    })
-  );
-
-  // Joins
-  if (options.query?.join) {
-    docs.push(
-      ApiQuery({
-        name: 'join',
-        required: false,
-        description: 'Join relations',
-        example: 'facilities||id,status'
-      })
-    );
+  if (!list) return;
+  const entityName = options.model?.type?.name || 'Entity';
+  if (postgrest) {
+    const rows = { type: 'array', items: { $ref: `#/components/schemas/${entityName}` } };
+    const contentRange = {
+      'Content-Range': {
+        description: "Rows returned and the total: 0-9/42. The total is * unless 'Prefer: count=exact' was sent or no limit was sent and more rows exist.",
+        schema: { type: 'string' },
+      },
+    };
+    ApiOperation({ summary: `Get many ${entityName}`, description: postgrestListDescription(options) })(proto, routeName, descriptor);
+    ApiResponse({ status: 200, description: 'The rows, as a JSON array', schema: rows, headers: contentRange })(proto, routeName, descriptor);
+    ApiResponse({ status: 206, description: 'Part of the matching rows; Content-Range has the total', schema: rows, headers: contentRange })(proto, routeName, descriptor);
   }
+}
 
-  // Pagination
-  docs.push(
-    ApiQuery({
-      name: 'limit',
-      required: false,
-      type: 'number',
-      description: 'Number of items per page'
-    }),
-    ApiQuery({
-      name: 'page',
-      required: false,
-      type: 'number',
-      description: 'Page number'
-    }),
-    ApiQuery({
-      name: 'offset',
-      required: false,
-      type: 'number',
-      description: 'Number of items to skip'
-    })
-  );
+const NESTJSX_QUERY_PARAMETERS = [
+  { name: 'fields', description: 'Comma-separated list of fields to select', example: 'name,status,id' },
+  { name: 'filter', description: 'Filter conditions (field||operator||value)', example: 'status||$eq||Active' },
+  { name: 's', description: 'Complex search conditions (JSON)', example: '{"name": {"$contL": "John"}}' },
+  { name: 'sort', description: 'Sort conditions (field,order)', example: 'name,ASC' },
+  { name: 'join', description: 'Join relations', example: 'facilities||id,status' },
+  { name: 'limit', type: 'number', description: 'Number of items per page' },
+  { name: 'page', type: 'number', description: 'Page number' },
+  { name: 'offset', type: 'number', description: 'Number of items to skip' },
+];
 
+/** Names a column filter parameter cannot take: they are PostgREST's own. */
+const POSTGREST_RESERVED = new Set(['select', 'order', 'limit', 'offset', 'or', 'and', 'embedded']);
+
+type ColumnKind = 'number' | 'boolean' | 'date' | 'string';
+
+/**
+ * The entity's filterable columns, from TypeORM's decorator metadata (the
+ * entity class has been decorated by the time @Crud runs). Leaves out what
+ * the controller hides: `query.exclude`, anything outside `query.allow`, and
+ * columns declared `select: false`.
+ */
+export function filterableColumns(options: CrudControllerOptions): Array<{ name: string; kind: ColumnKind; nullable: boolean }> {
+  const entity: any = options.model?.type;
+  if (typeof entity !== 'function') return [];
+  const chain: Function[] = [];
+  for (let c = entity; typeof c === 'function' && c !== Function.prototype; c = Object.getPrototypeOf(c)) chain.push(c);
+  let columns: any[];
+  try {
+    columns = getMetadataArgsStorage().filterColumns(chain);
+  } catch {
+    return [];
+  }
+  const exclude = new Set<string>(options.query?.exclude || []);
+  const allow: string[] | undefined = options.query?.allow?.length ? options.query.allow : undefined;
+  const out = new Map<string, { name: string; kind: ColumnKind; nullable: boolean }>();
+  for (const column of columns) {
+    const name = column.propertyName as string;
+    if (exclude.has(name) || (allow && !allow.includes(name)) || column.options?.select === false) continue;
+    if (POSTGREST_RESERVED.has(name)) continue;
+    const declared = column.options?.type ?? Reflect.getMetadata('design:type', column.target.prototype, name);
+    const type = (typeof declared === 'function' ? declared.name : String(declared ?? '')).toLowerCase();
+    const kind: ColumnKind =
+      /date|time/.test(type) || /date/i.test(column.mode) ? 'date'
+      : /bool/.test(type) ? 'boolean'
+      : /int|num|dec|float|double|real|money|serial/.test(type) ? 'number'
+      : 'string';
+    out.set(name, { name, kind, nullable: Boolean(column.options?.nullable) });
+  }
+  return [...out.values()];
+}
+
+const FILTER_EXAMPLE: Record<ColumnKind, string> = {
+  number: 'gte.5',
+  boolean: 'is.true',
+  date: 'gte.2026-01-01',
+  string: 'ilike.*abc*',
+};
+
+/**
+ * PostgREST query parameters for a read route, written for a caller that
+ * builds requests from this document (an agent through @apso/mcp, a generated
+ * client). One optional parameter per column, because that is the wire
+ * format: `views=gte.100`.
+ */
+function postgrestQueryParameters(options: CrudControllerOptions, list: boolean) {
+  const relations = Object.keys(options.query?.join || {});
+  const select = {
+    name: 'select',
+    description:
+      'Columns to return, comma-separated. Default: all.' +
+      (relations.length
+        ? ` Embed related rows with rel(col,...) or rel(*): ${relations.join(', ')}.` +
+          (list ? ' rel!inner(...) keeps only rows that have a related row.' : '')
+        : ''),
+    schema: { type: 'string' },
+  };
+  if (!list) return [select];
+
+  const text = (name: string, description: string) => ({ name, description, schema: { type: 'string' } });
+  const limit = options.query?.limit ?? 20;
+  const docs: any[] = [
+    select,
+    text('order', 'Sort: col.asc or col.desc, comma-separated. Optional .nullsfirst or .nullslast.'),
+    { name: 'limit', description: `Maximum rows. Default ${limit}, at most ${options.query?.maxLimit ?? 100}.`, schema: { type: 'integer' } },
+    { name: 'offset', description: 'Rows to skip.', schema: { type: 'integer' } },
+    text('or', 'Any condition matches: (col.op.value,col.op.value). Nest and(...) inside.'),
+    text('and', 'Every condition matches: (col.op.value,col.op.value). Nest or(...) inside.'),
+  ];
+  for (const column of filterableColumns(options)) {
+    docs.push(text(column.name, `Filter, op.value: ${FILTER_EXAMPLE[column.kind]}${column.nullable ? ', is.null' : ''}`));
+  }
+  if (relations.length) {
+    docs.push({
+      name: 'embedded',
+      description:
+        `Filters on embedded rows, keyed rel.column: {"${relations[0]}.<column>":"eq.x"}. ` +
+        'Sent as rel.column=op.value. The relation must be in select.',
+      style: 'form',
+      explode: true,
+      schema: { type: 'object', additionalProperties: { type: 'string' } },
+    });
+  }
   return docs;
+}
+
+/** The list operation's description: the filter grammar once, and one worked example. */
+function postgrestListDescription(options: CrudControllerOptions): string {
+  const entityName = options.model?.type?.name || 'Entity';
+  const columns = filterableColumns(options);
+  const relation = Object.keys(options.query?.join || {}).find(r => !r.includes('.'));
+  const first = columns[0]?.name ?? 'id';
+  const filtered = columns.find(c => c.name !== first) ?? columns[0];
+  const example =
+    `?select=${[...new Set([first, filtered?.name].filter(Boolean))].join(',')}${relation ? `,${relation}(*)` : ''}` +
+    (filtered ? `&${filtered.name}=${FILTER_EXAMPLE[filtered.kind]}` : '') +
+    `&order=${first}.desc&limit=10`;
+  return (
+    `Returns ${entityName} rows as a JSON array. Filter with one parameter per column, value op.value. ` +
+    'Operators: eq, neq, gt, gte, lt, lte, like, ilike (* is the wildcard), in.(a,b), is.null, is.true, is.false. ' +
+    'Prefix not. to negate (not.eq.5). Filters on different columns must all match. ' +
+    // Content-Range and Prefer are documented on the responses, not here:
+    // @apso/mcp copies this text into the tool description, and a tool call has no headers.
+    `Without limit the first ${options.query?.limit ?? 20} rows come back; send limit and offset for more. ` +
+    `Example: ${example}`
+  );
 }
 
 /**
@@ -407,11 +508,11 @@ const SERVICE_METHOD: Record<string, { op: string; hasBody: boolean }> = {
  *    body routes) so Nest resolves them at runtime. Override methods
  *    already carry @ParsedRequest/@Body in the source.
  */
-function applyMethodDecorators(target: any, legacyName: string, decorators: any[]) {
+function applyMethodDecorators(target: any, legacyName: string, decorators: any[]): string | undefined {
   const proto = target.prototype;
   const baseName = `${legacyName}Base` as BaseRouteName;
   const spec = SERVICE_METHOD[baseName];
-  if (!spec) return;
+  if (!spec) return undefined;
 
   // (1) ensure the delegator exists
   if (typeof proto[baseName] !== 'function') {
@@ -441,4 +542,5 @@ function applyMethodDecorators(target: any, legacyName: string, decorators: any[
   decorators.forEach(decorator => {
     decorator(proto, routeName, Object.getOwnPropertyDescriptor(proto, routeName));
   });
+  return routeName;
 }

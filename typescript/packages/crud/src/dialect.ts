@@ -114,6 +114,21 @@ let appDialects: readonly Dialect[] | undefined;
  */
 export function setAcceptedDialects(dialects?: readonly Dialect[]): void {
   appDialects = dialects && dialects.length > 0 ? [...dialects] : undefined;
+  // @Crud documents its read routes for the accepted dialects; redo that.
+  dialectListeners.forEach(listener => listener());
+}
+
+const dialectListeners: Array<() => void> = [];
+
+/** Run `listener` whenever setAcceptedDialects changes the app-wide default. */
+export function onAcceptedDialectsChange(listener: () => void): void {
+  dialectListeners.push(listener);
+}
+
+/** True when a controller with this `dialects` option accepts PostgREST and nothing else. */
+export function isPostgrestOnly(controllerDialects?: readonly Dialect[]): boolean {
+  const allowed = controllerDialects && controllerDialects.length > 0 ? controllerDialects : appDialects ?? ALL_DIALECTS;
+  return allowed.length > 0 && allowed.every(d => d === 'postgrest');
 }
 
 /**

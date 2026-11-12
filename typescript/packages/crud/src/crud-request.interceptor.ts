@@ -15,8 +15,10 @@ import {
   CallHandler,
   Inject,
   BadRequestException,
+  HttpException,
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
+import { tap } from 'rxjs/operators';
 import { Reflector } from '@nestjs/core';
 import {
   ParsedRequest,
@@ -68,6 +70,8 @@ export class CrudRequestInterceptor implements NestInterceptor {
     // auth) -> ParsedRequest contract, so the engine downstream is identical.
     // An invalid header or an ambiguous mixed-dialect query throws
     // RequestQueryException -> 400 (see resolveDialect / docs/DIALECTS.md).
+    let parsedRequest: ParsedRequest | undefined;
+    const res = context.switchToHttp().getResponse();
     try {
       const dialect = resolveDialect(
         request.query,
@@ -79,12 +83,23 @@ export class CrudRequestInterceptor implements NestInterceptor {
           ? new PostgrestRequestParser(crudOptions)
           : new CrudRequestParser(crudOptions);
 
-      const parsedRequest = parser.parse(request.query, request.params, authContext);
+      const isRead = request.method === undefined || request.method === 'GET' || request.method === 'HEAD';
+      const pgRead = dialect === 'postgrest' && isRead;
+      if (pgRead && /application\/vnd\.pgrst\./i.test(String(request.headers?.accept ?? ''))) {
+        throw new RequestQueryException(
+          "The application/vnd.pgrst.* media types are not supported. A list is always a JSON array; read one row with GET /<resource>/<id>.",
+        );
+      }
+      const query = pgRead ? withRangeHeader(request.query, request.headers?.range) : request.query;
+      parsedRequest = parser.parse(query, request.params, authContext);
+      if (pgRead) {
+        const count = /(?:^|[,;\s])count=(exact|planned|estimated)\b/i.exec(String(request.headers?.prefer ?? ''));
+        if (count) parsedRequest.parsed.count = count[1].toLowerCase() as 'exact' | 'planned' | 'estimated';
+      }
       request[PARSED_CRUD_REQUEST_KEY] = parsedRequest;
 
       // Echo the resolved dialect so clients and the conformance battery can
       // confirm which parser ran (harmless if the response is already sent).
-      const res = context.switchToHttp().getResponse();
       if (res && typeof res.setHeader === 'function' && !res.headersSent) {
         res.setHeader('X-Crud-Dialect', dialect);
       }
@@ -95,7 +110,11 @@ export class CrudRequestInterceptor implements NestInterceptor {
       throw e;
     }
 
-    return next.handle();
+    // After the handler: the engine left what a PostgREST list returned on
+    // the parsed request (see TypeOrmCrudService.getMany). Runs before Nest
+    // writes the response, so headers and status can still be set.
+    const parsed = parsedRequest;
+    return next.handle().pipe(tap(() => sendContentRange(res, parsed)));
   }
 
   /**
@@ -114,6 +133,53 @@ export class CrudRequestInterceptor implements NestInterceptor {
     }
 
     return options || {};
+  }
+}
+
+/**
+ * PostgREST `Range: 0-19` (with or without `Range-Unit: items`) is the same
+ * window as offset=0&limit=20, and `Range: 10-` is offset=10. A header in any
+ * other unit (`bytes=...`) is ignored, as RFC 7233 allows. Sending it together
+ * with limit/offset is a 400 and an inverted range is a 416.
+ */
+export function withRangeHeader(query: Record<string, any> = {}, header?: string | string[]): Record<string, any> {
+  const m = /^\s*(?:items=)?(\d+)-(\d*)\s*$/.exec(String((Array.isArray(header) ? header[0] : header) ?? ''));
+  if (!m) return query;
+  if (query.limit !== undefined || query.offset !== undefined) {
+    throw new RequestQueryException('Send either the Range header or the limit and offset parameters, not both.');
+  }
+  const from = Number(m[1]);
+  if (m[2] === '') return { ...query, offset: String(from) };
+  const to = Number(m[2]);
+  if (to < from) throw new HttpException(`Invalid Range '${m[0].trim()}': the end is before the start.`, 416);
+  return { ...query, offset: String(from), limit: String(to - from + 1) };
+}
+
+/**
+ * PostgREST response headers for a list: `Content-Range: <from>-<to>/<total>`
+ * (`*` for an empty page, `*` for a total that was not counted),
+ * `Preference-Applied` when a count was asked for, and 206 when the total is
+ * known and the page holds only part of it.
+ */
+function sendContentRange(res: any, req?: ParsedRequest): void {
+  const range = req?.range;
+  if (!range || !res || res.headersSent) return;
+  const set = (name: string, value: string) =>
+    typeof res.setHeader === 'function' ? res.setHeader(name, value) : res.header?.(name, value);
+  const span = range.rows > 0 ? `${range.offset}-${range.offset + range.rows - 1}` : '*';
+  set('Range-Unit', 'items');
+  set('Content-Range', `${span}/${range.total ?? '*'}`);
+  // planned and estimated are answered with an exact count, and say so.
+  if (req.parsed.count) set('Preference-Applied', 'count=exact');
+  // A browser on another origin can only read headers the server exposes.
+  const exposed = String(res.getHeader?.('Access-Control-Expose-Headers') ?? '');
+  if (!/content-range/i.test(exposed)) {
+    set('Access-Control-Expose-Headers', [exposed, 'Content-Range, Preference-Applied'].filter(Boolean).join(', '));
+  }
+  if (range.total !== undefined && range.rows > 0 && range.rows < range.total && typeof res.status === 'function') {
+    // Nest sets the route's default status before the handler runs and does
+    // not set it again, so this one stands.
+    res.status(206);
   }
 }
 
