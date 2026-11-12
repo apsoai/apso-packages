@@ -15,7 +15,11 @@ export interface RetryConfig {
 
 export interface ApsoClientConfig {
   baseURL: string;
-  apiKey: string;
+  /** Server-side secret, sent as `x-api-key`. Never ship it to a browser. */
+  apiKey?: string;
+  /** The signed-in user's token, sent as `Authorization: Bearer`. A function is
+   *  called on every request, so a refreshed token is picked up. */
+  accessToken?: string | (() => string | Promise<string>);
   client?: 'axios' | 'fetch';
   timeout?: number;
   retry?: RetryConfig | boolean;
@@ -41,6 +45,19 @@ export interface CacheEntry<T> {
   expiry: number;
 }
 
+/** Thrown when the service answers 401 or 403. */
+export class ApsoAuthError extends Error {
+  constructor(
+    message: string,
+    public readonly status: 401 | 403,
+    /** Matches the `x-request-id` in the service's log. */
+    public readonly requestId?: string,
+  ) {
+    super(message);
+    this.name = 'ApsoAuthError';
+  }
+}
+
 // ============================================================================
 // Default Configuration
 // ============================================================================
@@ -52,13 +69,19 @@ const DEFAULT_RETRY_CONFIG: RetryConfig = {
   statusCodes: [408, 429, 500, 502, 503, 504],
 };
 
+function newRequestId(): string {
+  // randomUUID is missing on pages served over plain http, hence the fallback.
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
 // ============================================================================
 // ApsoClient
 // ============================================================================
 
 class ApsoClient {
   private baseURL: string;
-  private apiKey: string;
+  private apiKey?: string;
+  private accessToken?: ApsoClientConfig['accessToken'];
   private httpClient: 'axios' | 'fetch';
   private timeout: number;
   private retryConfig: RetryConfig | null;
@@ -70,6 +93,10 @@ class ApsoClient {
   constructor(config: ApsoClientConfig) {
     this.baseURL = config.baseURL;
     this.apiKey = config.apiKey;
+    this.accessToken = config.accessToken;
+    if (config.apiKey && typeof window !== 'undefined') {
+      console.warn('[ApsoClient] apiKey is a server-side secret and must not be used in a browser. Use accessToken with the signed-in user\'s token.');
+    }
     this.httpClient = config.client || 'fetch';
     this.timeout = config.timeout || DEFAULT_TIMEOUT;
     this.customHeaders = config.headers || {};
@@ -90,21 +117,31 @@ class ApsoClient {
       this.axiosInstance = axios.create({
         baseURL: this.baseURL,
         timeout: this.timeout,
-        headers: {
-          'x-api-key': this.apiKey,
-          ...this.customHeaders,
-        },
       });
     }
     return this.axiosInstance;
   }
 
-  private getHeaders(): Record<string, string> {
+  private async getHeaders(): Promise<Record<string, string>> {
+    const token = typeof this.accessToken === 'function' ? await this.accessToken() : this.accessToken;
+    const hasRequestId = Object.keys(this.customHeaders).some(k => k.toLowerCase() === 'x-request-id');
     return {
-      'x-api-key': this.apiKey,
+      ...(this.apiKey ? { 'x-api-key': this.apiKey } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       'Content-Type': 'application/json',
+      ...(hasRequestId ? {} : { 'x-request-id': newRequestId() }),
       ...this.customHeaders,
     };
+  }
+
+  private toAuthError(status: number, body: any, responseId: unknown, headers: Record<string, string>): ApsoAuthError {
+    const raw = body?.message ?? body?.error ?? (typeof body === 'string' && body ? body : `HTTP ${status}`);
+    const sentKey = Object.keys(headers).find(k => k.toLowerCase() === 'x-request-id');
+    return new ApsoAuthError(
+      Array.isArray(raw) ? raw.join('; ') : String(raw),
+      status as 401 | 403,
+      (responseId as string) || (sentKey && headers[sentKey]) || undefined,
+    );
   }
 
   private async sleep(ms: number): Promise<void> {
@@ -135,13 +172,14 @@ class ApsoClient {
             console.log(`[ApsoClient][DEBUG] ${method.toUpperCase()} ${this.baseURL}${url}${queryString}`);
           }
 
+          const headers = await this.getHeaders();
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
           try {
             const response = await fetch(`${this.baseURL}${url}${queryString}`, {
               method,
-              headers: this.getHeaders(),
+              headers,
               body: data ? JSON.stringify(data) : undefined,
               signal: controller.signal,
             });
@@ -153,6 +191,12 @@ class ApsoClient {
                 await this.sleep(delay * attempt); // Exponential backoff
                 continue;
               }
+              if (response.status === 401 || response.status === 403) {
+                const text = await response.text().catch(() => '');
+                let body: unknown = text;
+                try { body = JSON.parse(text); } catch { /* not JSON, keep the text */ }
+                throw this.toAuthError(response.status, body, response.headers.get('x-request-id'), headers);
+              }
               throw new Error(`HTTP error! status: ${response.status}`);
             }
 
@@ -162,7 +206,7 @@ class ApsoClient {
           }
         } else if (this.httpClient === 'axios') {
           const axiosClient = await this.getAxiosInstance();
-          const config = { params, headers: this.getHeaders() };
+          const config = { params, headers: await this.getHeaders() };
 
           if (this.debug) {
             const paramString = params ? '?' + new URLSearchParams(params as any).toString() : '';
@@ -186,7 +230,12 @@ class ApsoClient {
         }
 
         throw new Error("Unsupported HTTP client");
-      } catch (error) {
+      } catch (caught) {
+        let error = caught;
+        const res = (caught as any)?.response; // axios puts the response on the error
+        if (res && (res.status === 401 || res.status === 403)) {
+          error = this.toAuthError(res.status, res.data, res.headers?.['x-request-id'], res.config?.headers ?? {});
+        }
         lastError = error as Error;
 
         // Check if we should retry
@@ -235,7 +284,7 @@ class ApsoClient {
       if (this.debug) console.log(`[ApsoClient][DEBUG][pg] ${method} ${url}`);
       const response = await fetch(url, {
         method,
-        headers: { ...this.getHeaders(), ...headers },
+        headers: { ...(await this.getHeaders()), ...headers },
         body: body !== undefined ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });
@@ -248,7 +297,10 @@ class ApsoClient {
       if (!response.ok) {
         return {
           data: null,
-          error: this.toPostgrestError(parsed, response.status),
+          error: {
+            ...this.toPostgrestError(parsed, response.status),
+            requestId: response.headers.get('x-request-id') ?? undefined,
+          },
           count, status: response.status, statusText: response.statusText,
         };
       }
@@ -303,6 +355,9 @@ class ApsoClient {
   ): Promise<T> {
     const queryString = this.buildQueryParams(params);
     const cacheKey = `${resource}${queryString}`;
+    // ponytail: no response cache when the token is a function, because one client
+    // can then serve several users. Key the cache by a token digest if this is needed.
+    if (typeof this.accessToken === 'function') useCache = false;
 
     if (useCache) {
       const cached = this.cache.get(cacheKey);
@@ -422,7 +477,10 @@ class ApsoClientFactory {
   private static clients: Map<string, ApsoClient> = new Map();
 
   public static getClient(config: ApsoClientConfig): ApsoClient {
-    const clientKey = `${config.baseURL}-${config.apiKey}`;
+    // A client that carries a user's token or custom headers is never cached,
+    // so one user's client cannot be handed to another.
+    if (config.accessToken || config.headers) return new ApsoClient(config);
+    const clientKey = `${config.baseURL}-${config.apiKey ?? ''}`;
     if (!ApsoClientFactory.clients.has(clientKey)) {
       ApsoClientFactory.clients.set(clientKey, new ApsoClient(config));
     }
