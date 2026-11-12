@@ -33,8 +33,13 @@ If a package changed, it is:
    fails the package loudly. Dry run: `bash .github/scripts/auto-release.sh guard npm
    @apso/sdk 1.2.0 minor`. Offline tests: `.github/scripts/test-version-guard.sh` (runs in
    the TypeScript CI workflow).
-2. **Built, tested, and published** (npm publish / PyPI / Go = the tag).
-3. **Committed** (`chore(release): … [skip ci]`), **tagged**, and **GitHub-released**.
+2. **Pinned to its siblings** (npm only): every dependency on another package of this
+   workspace is set to `^<that package's current version>`, so `@apso/crud` 1.2.0 built
+   next to `@apso/postgrest-request` 1.2.0 requires `^1.2.0` of it. Packages release in
+   dependency order, so a sibling released in the same run is already at its new version.
+   Only the package being released is rewritten. Offline test: `test-version-guard.sh`.
+3. **Built, tested, and published** (npm publish / PyPI / Go = the tag).
+4. **Committed** (`chore(release): … [skip ci]`), **tagged**, and **GitHub-released**.
 
 A package whose directory didn't change is skipped. The release commit is marked `[skip ci]`
 and pushed with the default token, so it never re-triggers the workflow.

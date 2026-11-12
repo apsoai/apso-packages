@@ -99,6 +99,23 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
       // A requested limit still applies to the bare array.
       if (isPostgrest) {
         this.applyPagination(queryBuilder, req, aliases.size > 0);
+        const { limit, offset } = this.window(req);
+        // limit=0 asks for no rows (a count-only request). TypeORM reads
+        // LIMIT 0 as "no limit", so the row query is skipped instead.
+        const rows = limit === 0 ? [] : await this.execute(queryBuilder, true);
+        // The total comes from the SAME query builder, so it is counted under
+        // the same WHERE as the rows: auth filter, controller filter, caller
+        // filters, inner embeds. It can never include a row the caller cannot
+        // read. Counted when asked for (Prefer: count=...), and also when the
+        // caller sent no limit and the default page came back full, so a
+        // default page size never hides that there are more rows.
+        const defaultedAndFull = req.query?.limit === undefined && rows.length >= limit;
+        const total =
+          req.parsed.count || defaultedAndFull
+            ? await this.run(() => queryBuilder.getCount(), true)
+            : undefined;
+        req.range = { offset, rows: rows.length, total };
+        return this.applyFieldAliases(rows, req);
       } else if (req.query?.limit !== undefined || this.options.query?.limit) {
         const maxLimit = this.options.query?.maxLimit || 100;
         const actualLimit = Math.min(
@@ -108,8 +125,7 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
         if (aliases.size > 0) queryBuilder.take(actualLimit);
         else queryBuilder.limit(actualLimit);
       }
-      const rows = await this.execute(queryBuilder, isPostgrest);
-      return isPostgrest ? this.applyFieldAliases(rows, req) : rows;
+      return this.execute(queryBuilder, false);
     }
 
     this.applyPagination(queryBuilder, req, aliases.size > 0);
@@ -159,20 +175,46 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     queryBuilder: SelectQueryBuilder<T>,
     isPostgrest: boolean,
   ): Promise<T[]> {
-    if (!isPostgrest) return queryBuilder.getMany();
+    return this.run(() => queryBuilder.getMany(), isPostgrest);
+  }
+
+  /**
+   * Run one query. In the PostgREST path a caller mistake that only Postgres
+   * can see is a 400, not a 500: an unknown column (42703), an operator the
+   * column type does not have (42883, `active=like.x` on a boolean), or a
+   * value that does not parse as the column type (class 22, `age=eq.abc`).
+   */
+  protected async run<R>(query: () => Promise<R>, isPostgrest: boolean): Promise<R> {
+    if (!isPostgrest) return query();
     try {
-      return await queryBuilder.getMany();
+      return await query();
     } catch (e: any) {
       // TypeORM wraps the driver error; the pg code lives on the error or its
-      // .driverError. 42703 = undefined_column.
-      const code = e?.code ?? e?.driverError?.code;
+      // .driverError.
+      const code = String(e?.code ?? e?.driverError?.code ?? '');
       if (code === '42703') {
         throw new BadRequestException(
           this.undefinedColumnMessage(e) ?? 'Unknown column in query',
         );
       }
+      if (code === '42883' || code.startsWith('22')) {
+        throw new BadRequestException(
+          `Invalid filter value or operator for the column type: ${e?.driverError?.message ?? e?.message}`,
+        );
+      }
       throw e;
     }
+  }
+
+  /** The LIMIT and OFFSET a list request resolves to. */
+  protected window(req: ParsedRequest): { limit: number; offset: number } {
+    const { limit, offset, page } = req.parsed;
+    const maxLimit = this.options.query?.maxLimit || 100;
+    const actualLimit =
+      limit === 0 && req.parsed.dialect === 'postgrest'
+        ? 0
+        : Math.min(limit || this.options.query?.limit || 20, maxLimit);
+    return { limit: actualLimit, offset: offset || ((page || 1) - 1) * actualLimit };
   }
 
   /** Extract the offending column from a 42703 error for a helpful 400 body. */
@@ -211,13 +253,14 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     const aliases = this.applyJoins(queryBuilder, req);
     this.applyWhere(queryBuilder, req, aliases);
 
-    const entity = await queryBuilder.getOne();
+    const isPostgrest = req.parsed.dialect === 'postgrest';
+    const entity = await this.run(() => queryBuilder.getOne(), isPostgrest);
 
     if (!entity) {
       throw new NotFoundException(`${this.entityName()} not found`);
     }
 
-    return entity;
+    return isPostgrest ? this.applyFieldAliases([entity], req)[0] : entity;
   }
 
   async createOne(req: ParsedRequest, dto: DeepPartial<T>): Promise<CreateOneResponse<T>> {
@@ -335,6 +378,12 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     const fields = req.parsed.fields;
 
     if (fields && fields.length > 0) {
+      // PostgREST answers an unknown column with a 400. (nestjsx drops it, #42.)
+      if (req.parsed.dialect === 'postgrest') {
+        const known = this.rootColumnNames();
+        const unknown = known && fields.find(f => !known.has(f));
+        if (unknown) throw new BadRequestException(`Unknown column '${unknown}' in select`);
+      }
       const selectFields = this.getSelect(req.parsed, this.options.query);
       queryBuilder.select(selectFields);
     }
@@ -511,13 +560,23 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     );
 
     const usedAliases = new Set<string>(['entity']);
+    const postgrest = req.parsed.dialect === 'postgrest';
 
     for (const join of ordered) {
       const path = join.field;
       const cfg = allowed ? allowed[path] : undefined;
       // nestjsx only applies joins configured in options.query.join; with no
       // allowlist at all, NO join is honored. Unknown paths are skipped.
-      if (!cfg) continue;
+      // A PostgREST embed that cannot be honored is a 400 instead: the caller
+      // asked for rows shaped by it and must not get them without it.
+      if (!cfg) {
+        if (postgrest) {
+          throw new BadRequestException(
+            `'${path}' cannot be embedded here. Embeddable relations: ${Object.keys(allowed || {}).join(', ') || 'none'}.`,
+          );
+        }
+        continue;
+      }
 
       const segments = path.split('.');
       const relationName = segments[segments.length - 1];
@@ -534,7 +593,13 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
       aliases.set(path, alias);
 
       const relation = `${parentAlias}.${relationName}`;
-      const required = Boolean(cfg && (cfg as any).required);
+      // `rel!inner(...)` drops parents that have no (matching) embedded row.
+      const required = Boolean((cfg && (cfg as any).required) || join.embedInner);
+      if (postgrest && join.select) {
+        const known = this.columnNamesOf(path);
+        const unknown = known && join.select.find(f => !known.has(f));
+        if (unknown) throw new BadRequestException(`Unknown column '${unknown}' in embed '${path}'`);
+      }
 
       // Effective select: requested ∩ allowed (when configured), + PK
       const allowedSelect: string[] | undefined = cfg && (cfg as any).allow;
@@ -584,6 +649,21 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     }
 
     return aliases;
+  }
+
+  /** Column property names of the entity at the end of a join path, or null without metadata. */
+  protected columnNamesOf(joinPath: string): Set<string> | null {
+    try {
+      let meta = this.repository.metadata;
+      for (const segment of joinPath.split('.')) {
+        const rel = meta.relations.find(r => r.propertyName === segment);
+        if (!rel) return null;
+        meta = rel.inverseEntityMetadata;
+      }
+      return new Set(meta.columns.map(c => c.propertyName));
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -643,12 +723,7 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     req: ParsedRequest,
     hasJoins = false
   ): void {
-    const { limit, offset, page } = req.parsed;
-    const maxLimit = this.options.query?.maxLimit || 100;
-
-    // Calculate actual limit and offset
-    const actualLimit = Math.min(limit || this.options.query?.limit || 20, maxLimit);
-    const actualOffset = offset || ((page || 1) - 1) * actualLimit;
+    const { limit: actualLimit, offset: actualOffset } = this.window(req);
 
     if (hasJoins) {
       queryBuilder.take(actualLimit);
