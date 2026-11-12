@@ -339,3 +339,29 @@ describe('@apso/mcp with OAuth sign-in', () => {
     expect(seen.every((value) => value === ORIGIN)).toBe(true);
   });
 });
+
+describe('@apso/mcp behind an adapter that already read the body', () => {
+  test('lists and calls tools when the request body is a Buffer on req.body', async () => {
+    const app = await NestFactory.create(AppModule, { logger: false });
+    // What a Lambda adapter does: the stream is spent and the body sits on req.body.
+    app.use('/mcp', (req: any, _res: any, next: () => void) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        req.body = Buffer.concat(chunks);
+        next();
+      });
+    });
+    mountMcp(app, SwaggerModule.createDocument(app, new DocumentBuilder().setTitle('notes').build()));
+    await app.listen(0);
+    try {
+      const url = new URL(`http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}/mcp`);
+      const client = new Client({ name: 'test', version: '1' });
+      await client.connect(new StreamableHTTPClientTransport(url));
+      const { tools } = await client.listTools();
+      expect(tools.map((tool) => tool.name)).toContain('list_notes');
+    } finally {
+      await app.close();
+    }
+  });
+});
