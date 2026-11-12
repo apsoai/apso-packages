@@ -372,6 +372,23 @@ export function mountMcp(app: INestApplication, document: OpenAPIObject, options
       .map((origin) => origin.trim())
       .filter(Boolean);
 
+  // The body when something upstream already read it: a Lambda adapter such as
+  // @vendia/serverless-express hands it over as a Buffer on req.body, and a
+  // body parser mounted before /mcp leaves an object. Undefined means the
+  // transport reads the stream itself. Invalid JSON is left for the transport
+  // to report.
+  const bufferedBody = (req: IncomingMessage): unknown => {
+    const body = (req as { body?: unknown }).body;
+    if (Buffer.isBuffer(body) || typeof body === 'string') {
+      try {
+        return JSON.parse(body.toString());
+      } catch {
+        return undefined;
+      }
+    }
+    return body && typeof body === 'object' && Object.keys(body).length > 0 ? body : undefined;
+  };
+
   app.use(mcpPath, async (req: IncomingMessage, res: ServerResponse) => {
     const origin = req.headers.origin;
     if (origin) {
@@ -426,13 +443,15 @@ export function mountMcp(app: INestApplication, document: OpenAPIObject, options
       }
       return callTool(dispatch, tool, params.arguments ?? {}, req.headers, clientId);
     });
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    // One JSON body per request instead of an event stream. Nothing here streams,
+    // and a Lambda adapter or a buffering gateway never finishes a streamed reply.
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => {
       void transport.close();
       void server.close();
     });
     await server.connect(transport);
-    await transport.handleRequest(req, res);
+    await transport.handleRequest(req, res, bufferedBody(req));
   });
   return tools;
 }
