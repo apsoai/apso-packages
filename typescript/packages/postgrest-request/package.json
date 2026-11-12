@@ -1,6 +1,6 @@
 {
   "name": "@apso/postgrest-request",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Client-safe PostgREST URL query parser for @apso/crud (dual-dialect). Emits the same parsed-request representation as @apso/crud-request.",
   "license": "Apache-2.0",
   "repository": {
@@ -20,7 +20,7 @@
     "lint": "tsc -p tsconfig.json --noEmit && bash ../../scripts/no-server-imports.sh postgrest-request"
   },
   "dependencies": {
-    "@apso/crud-core": "^1.0.3"
+    "@apso/crud-core": "^1.1.0"
   },
   "publishConfig": {
     "access": "public"
