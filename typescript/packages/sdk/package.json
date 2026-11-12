@@ -1,6 +1,6 @@
 {
   "name": "@apso/sdk",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "SDK for Apso services, offering easy access to OpenAPI-compliant CRUD operations.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -38,7 +38,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@apso/crud-request": "^1.0.0",
+    "@apso/crud-request": "^1.0.2",
     "axios": "^1.18.1"
   },
   "devDependencies": {
