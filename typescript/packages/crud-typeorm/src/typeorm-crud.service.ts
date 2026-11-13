@@ -352,15 +352,41 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   }
 
   async deleteOne(req: ParsedRequest): Promise<DeleteOneResponse<T>> {
-    const queryBuilder = this.repository.createQueryBuilder('entity');
-    this.applyWhere(queryBuilder, req);
+    await this.repository.manager.transaction(async manager => {
+      const queryBuilder = manager.createQueryBuilder<T>(this.repository.target, 'entity');
+      this.applyWhere(queryBuilder, req);
 
-    const entity = await queryBuilder.getOne();
-    if (!entity) {
-      throw new NotFoundException(`${this.entityName()} not found`);
-    }
+      const entity = await queryBuilder.getOne();
+      if (!entity) {
+        throw new NotFoundException(`${this.entityName()} not found`);
+      }
 
-    await this.repository.remove(entity);
+      // This statement decides who deleted the row. Of two requests that
+      // delete the same row at the same time, the database lets one DELETE
+      // take it; the other removes 0 rows and answers 404. remove() alone
+      // never reports that, so both requests used to answer 200 and a caller
+      // could not tell whether it was the one that deleted the row.
+      const take = manager
+        .createQueryBuilder()
+        .delete()
+        .from(this.repository.target)
+        .where(this.primaryKeyValues(entity))
+        .callListeners(false);
+      // Not every driver reports a row count (typeorm-pglite does not), so
+      // ask for the deleted row back where the database can return it.
+      if (manager.connection.driver.isReturningSqlSupported('delete')) {
+        take.returning(this.rootPrimaryKeys());
+      }
+      const taken = await take.execute();
+      if ((taken.affected ?? taken.raw?.length) === 0) {
+        throw new NotFoundException(`${this.entityName()} not found`);
+      }
+
+      // Still run remove(): it calls the remove listeners and subscribers
+      // with the entity (@apso/domain-events reads it there). Its own DELETE
+      // finds no row.
+      await manager.remove(entity);
+    });
     // nestjsx returns void by default (returnDeleted is options work, #21)
     return undefined;
   }

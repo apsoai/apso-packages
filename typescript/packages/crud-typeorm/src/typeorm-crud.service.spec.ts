@@ -564,4 +564,58 @@ describe('TypeOrmCrudService', () => {
       expect(build('$bogus', 5)).toEqual({ clause: 'entity.field = :p0', params: { p0: 5 } });
     });
   });
+
+  // The read finds the row in every case below. What the DELETE statement
+  // reports decides whether this request deleted it. The same behaviour runs
+  // against a database in crud-parity/test/concurrent-delete.spec.ts.
+  describe('deleteOne', () => {
+    const row = { id: 7, name: 'single use', status: 'Active', createdAt: new Date('2026-11-13T00:00:00.000Z') };
+    const req = {
+      parsed: { paramsFilter: [{ field: 'id', operator: '$eq', value: 7 }], search: {} },
+      options: {}
+    } as unknown as ParsedRequest;
+
+    const run = async (deleteResult: unknown, returning = true) => {
+      (mockQueryBuilder.getOne as jest.Mock).mockResolvedValue(row);
+      const take: any = {};
+      for (const step of ['delete', 'from', 'where', 'callListeners', 'returning']) take[step] = jest.fn(() => take);
+      take.execute = jest.fn().mockResolvedValue(deleteResult);
+      const manager = {
+        createQueryBuilder: jest.fn((target?: unknown) => (target ? mockQueryBuilder : take)),
+        remove: jest.fn(),
+        connection: { driver: { isReturningSqlSupported: () => returning } }
+      };
+      (mockRepository as any).manager = { transaction: (work: (m: unknown) => Promise<void>) => work(manager) };
+      const outcome = await service.deleteOne(req).then(
+        () => 'deleted',
+        (error: Error) => error.message
+      );
+      return { outcome, manager, take };
+    };
+
+    it('deletes the row it read and still calls remove() with the entity', async () => {
+      const { outcome, manager, take } = await run({ raw: [{ id: 7 }], affected: 1 });
+      expect(outcome).toBe('deleted');
+      expect(take.where).toHaveBeenCalledWith({ id: 7 });
+      expect(take.callListeners).toHaveBeenCalledWith(false);
+      expect(manager.remove).toHaveBeenCalledWith(row);
+    });
+
+    it('answers not found when another request deleted the row after the read', async () => {
+      const { outcome, manager } = await run({ raw: [], affected: 0 });
+      expect(outcome).toBe('TestEntity not found');
+      expect(manager.remove).not.toHaveBeenCalled();
+    });
+
+    it('reads the deleted rows when the driver reports no row count', async () => {
+      expect((await run({ raw: [] })).outcome).toBe('TestEntity not found');
+      expect((await run({ raw: [{ id: 7 }] })).outcome).toBe('deleted');
+    });
+
+    it('does not ask for the row back where the database cannot return it', async () => {
+      const { outcome, take } = await run({ raw: {}, affected: 1 }, false);
+      expect(outcome).toBe('deleted');
+      expect(take.returning).not.toHaveBeenCalled();
+    });
+  });
 });
