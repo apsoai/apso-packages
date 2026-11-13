@@ -94,6 +94,30 @@ Set `resource` to the public URL of the endpoint. Without it the URL is built fr
 
 Your identity provider has to support what MCP clients need to register themselves: Client ID Metadata Documents, or Dynamic Client Registration, or a client you registered by hand.
 
+## An internal address next to the external one
+
+An API often has two audiences: its end users, who sign in, and its own team, agents and scripts, which hold an API key. `@apso/mcp` serves one address for each. Provide a second `McpAuth` under the `MCP_INTERNAL_AUTH` token and the same tools are also served at `/mcp/internal`, with that check:
+
+```ts
+import { MCP_INTERNAL_AUTH, McpAuth } from '@apso/mcp';
+
+{
+  provide: MCP_INTERNAL_AUTH,
+  inject: [ApiKeyGuard],
+  useFactory: (guard: ApiKeyGuard): McpAuth => ({
+    authorizationServers: [], // or the issuer your team signs in with
+    ignoredHeaders: ['authorization'],
+    verify: (req) => guard.authenticate(req), // refuses anything but a valid key
+  }),
+}
+```
+
+- `/mcp/internal` runs only its own `verify`. `/mcp` keeps the `MCP_AUTH` check.
+- With `MCP_INTERNAL_AUTH` and no `MCP_AUTH`, only `/mcp/internal` is served and `/mcp` answers `404`.
+- With `authorizationServers` empty, a refused request gets a plain `401` and no metadata is served for the address. With an issuer listed, the `401` carries the challenge and `/.well-known/oauth-protected-resource/mcp/internal` names that issuer. The root form of the metadata always describes `/mcp`.
+- `resource` defaults to the request's host plus `/mcp/internal`.
+- `ignoredHeaders` lists request headers the address does not take a credential from. They are not passed on to the route a tool calls. Set `['x-api-key']` on the external address so a key sent next to a user's token cannot turn the call into a key caller's, and `['authorization']` on the internal one.
+
 ## Telling an MCP call from a REST call
 
 A tool call reaches your route as an ordinary request. To tell the two apart, read `req.apso.mcp` in a handler, guard or interceptor:
@@ -128,6 +152,6 @@ An MCP client that runs in a browser on another origin needs the endpoint to ans
 
 ## Limits
 
-- Without `MCP_AUTH`, listing tools is open, like the OpenAPI document it is built from. Calling a tool is always checked by the route's guards.
+- Without `MCP_AUTH` and `MCP_INTERNAL_AUTH`, listing tools is open, like the OpenAPI document it is built from. Calling a tool is always checked by the route's guards.
 - Scopes are not checked yet: a signed-in user's agent can do what the user can.
 - Express only.

@@ -52,12 +52,25 @@ export interface McpRouteTool {
 export const MCP_AUTH = 'APSO_MCP_AUTH';
 
 /**
+ * DI token for the internal address, `<path>/internal` (default
+ * /mcp/internal): the one the app's own team, agents and scripts call with a
+ * service credential such as an API key. Provide a McpAuth under this token
+ * and mountMcp serves that address with its check. An app that provides it
+ * and no MCP_AUTH serves the internal address only.
+ */
+export const MCP_INTERNAL_AUTH = 'APSO_MCP_INTERNAL_AUTH';
+
+/**
  * Sign-in for MCP clients, when callers authenticate with OAuth access tokens
  * from an identity provider (Auth0, Clerk, ...). The server only describes
  * where to sign in (RFC 9728) and checks tokens; it never issues them.
  */
 export interface McpAuth {
-  /** Issuer URLs of the identity providers whose tokens the API accepts. */
+  /**
+   * Issuer URLs of the identity providers whose tokens the API accepts. Empty
+   * when the address has no sign-in to point a client at: a refused request
+   * then gets a plain 401 and no metadata is served for the address.
+   */
   authorizationServers: string[];
   /**
    * Checks the request's credentials the same way the API does. Reject (throw)
@@ -73,6 +86,13 @@ export interface McpAuth {
    */
   resource?: string;
   scopesSupported?: string[];
+  /**
+   * Request headers this address does not take a credential from, for example
+   * ['x-api-key'] where only a user's token is accepted. They are not passed
+   * on to the route a tool calls, so a credential this address did not check
+   * cannot change who the caller is there.
+   */
+  ignoredHeaders?: string[];
 }
 
 export interface McpOptions {
@@ -83,6 +103,8 @@ export interface McpOptions {
   path?: string;
   /** OAuth sign-in for MCP clients. Default: the MCP_AUTH provider, when the app has one. */
   auth?: McpAuth;
+  /** The check on the internal address, `<path>/internal`. Default: the MCP_INTERNAL_AUTH provider, when the app has one. */
+  internal?: McpAuth;
   /**
    * Origins a browser-based MCP client may call the endpoint from. Default: the
    * app's own setting, the comma-separated ALLOWED_ORIGINS environment
@@ -265,6 +287,7 @@ async function callTool(
   args: Record<string, any>,
   callerHeaders: IncomingMessage['headers'],
   clientId?: string,
+  ignored: string[] = [],
 ) {
   const missing: string[] = [];
   const path = tool.path.replace(/\{(\w+)\}/g, (_, key) => {
@@ -292,7 +315,7 @@ async function callTool(
 
   const headers: Record<string, string> = { accept: 'application/json' };
   for (const [key, value] of Object.entries(callerHeaders)) {
-    if (value !== undefined && !NOT_FORWARDED.has(key)) headers[key] = Array.isArray(value) ? value.join(', ') : value;
+    if (value !== undefined && !NOT_FORWARDED.has(key) && !ignored.includes(key)) headers[key] = Array.isArray(value) ? value.join(', ') : value;
   }
 
   const response = await dispatchInMemory(dispatch, tool.method, qs ? `${path}?${qs}` : path, headers, { tool: tool.name, ...(clientId ? { clientId } : {}) }, args.body);
@@ -331,6 +354,10 @@ function metadataUrl(resource: URL): string {
  * sign-in configured (McpAuth), every request to the endpoint needs a valid
  * token and an unauthenticated one gets the 401 that starts sign-in.
  * Without it, listing tools is open, like the OpenAPI document.
+ *
+ * With a check for the internal address (MCP_INTERNAL_AUTH) the same tools are
+ * also served at `<path>/internal`, where that check decides who may call. An
+ * app with that check and no OAuth sign-in serves the internal address only.
  */
 export function mountMcp(app: INestApplication, document: OpenAPIObject, options: McpOptions = {}): McpRouteTool[] {
   const tools = toolsFromDocument(document);
@@ -340,17 +367,36 @@ export function mountMcp(app: INestApplication, document: OpenAPIObject, options
   // Look the provider up by scanning modules: app.get() on a missing token
   // ends the process under Nest's default abortOnError. No provider means
   // callers authenticate some other way (API key, session).
-  let auth = options.auth;
-  for (const module of auth ? [] : app.get(ModulesContainer).values()) {
-    auth = auth ?? (module.providers.get(MCP_AUTH)?.instance as McpAuth | undefined);
-  }
+  const provided = (token: string): McpAuth | undefined => {
+    for (const module of app.get(ModulesContainer).values()) {
+      const instance = module.providers.get(token)?.instance as McpAuth | undefined;
+      if (instance) return instance;
+    }
+    return undefined;
+  };
+  const external = options.auth ?? provided(MCP_AUTH);
+  const internal = options.internal ?? provided(MCP_INTERNAL_AUTH);
+  const internalPath = `${mcpPath}/internal`;
+  // One address per audience. The internal one is mounted first: Express
+  // matches a mount path as a prefix, so mcpPath would answer for it. With a
+  // check for the internal address and no sign-in, mcpPath is not served:
+  // nothing is left open beside the checked address.
+  const endpoints: Array<{ path: string; auth?: McpAuth }> = [
+    ...(internal ? [{ path: internalPath, auth: internal }] : []),
+    ...(external || !internal ? [{ path: mcpPath, auth: external }] : []),
+  ];
 
-  if (auth) {
-    const settings = auth;
+  if (endpoints.some((endpoint) => endpoint.auth?.authorizationServers.length)) {
     // Tells an MCP client where to sign in. Public by design, and readable
     // from a browser-based client on another origin.
-    app.use(PRM_PATH, (req: IncomingMessage, res: ServerResponse) => {
-      const resource = resourceUrl(req, settings, mcpPath);
+    app.use(PRM_PATH, (req: IncomingMessage, res: ServerResponse, next: () => void) => {
+      // The internal address is described at its own path only. Every other
+      // form, the root one included, describes mcpPath.
+      const asked = (req.url ?? '').split('?')[0].replace(/\/+$/, '') === internalPath ? internalPath : mcpPath;
+      const endpoint = endpoints.find((candidate) => candidate.path === asked);
+      const settings = endpoint?.auth;
+      if (!endpoint || !settings || settings.authorizationServers.length === 0) return next();
+      const resource = resourceUrl(req, settings, endpoint.path);
       res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*', 'cache-control': 'max-age=300' });
       res.end(
         JSON.stringify({
@@ -389,7 +435,8 @@ export function mountMcp(app: INestApplication, document: OpenAPIObject, options
     return body && typeof body === 'object' && Object.keys(body).length > 0 ? body : undefined;
   };
 
-  app.use(mcpPath, async (req: IncomingMessage, res: ServerResponse) => {
+  const serve = (path: string, auth?: McpAuth) => app.use(path, async (req: IncomingMessage, res: ServerResponse) => {
+    const ignored = (auth?.ignoredHeaders ?? []).map((header) => header.toLowerCase());
     const origin = req.headers.origin;
     if (origin) {
       // The MCP transport requires 403 for an Origin that is not allowed.
@@ -422,9 +469,12 @@ export function mountMcp(app: INestApplication, document: OpenAPIObject, options
         if (typeof verified?.clientId === 'string') clientId = verified.clientId;
       } catch {
         // The 401 is what starts sign-in: it points the client at the metadata.
-        const challenge = `Bearer resource_metadata="${metadataUrl(resourceUrl(req, auth, mcpPath))}"`;
+        // An address with no sign-in to point at answers a plain 401.
+        const challenge = `Bearer resource_metadata="${metadataUrl(resourceUrl(req, auth, path))}"`;
         res.writeHead(401, {
-          'www-authenticate': req.headers.authorization ? `${challenge}, error="invalid_token"` : challenge,
+          ...(auth.authorizationServers.length > 0
+            ? { 'www-authenticate': req.headers.authorization ? `${challenge}, error="invalid_token"` : challenge }
+            : {}),
           'content-type': 'application/json',
         });
         res.end(JSON.stringify({ error: 'unauthorized' }));
@@ -441,7 +491,7 @@ export function mountMcp(app: INestApplication, document: OpenAPIObject, options
       if (!tool) {
         return { content: [{ type: 'text' as const, text: `Unknown tool ${params.name}` }], isError: true };
       }
-      return callTool(dispatch, tool, params.arguments ?? {}, req.headers, clientId);
+      return callTool(dispatch, tool, params.arguments ?? {}, req.headers, clientId, ignored);
     });
     // One JSON body per request instead of an event stream. Nothing here streams,
     // and a Lambda adapter or a buffering gateway never finishes a streamed reply.
@@ -453,5 +503,6 @@ export function mountMcp(app: INestApplication, document: OpenAPIObject, options
     await server.connect(transport);
     await transport.handleRequest(req, res, bufferedBody(req));
   });
+  for (const endpoint of endpoints) serve(endpoint.path, endpoint.auth);
   return tools;
 }
