@@ -506,6 +506,71 @@ describe('TypeOrmCrudService', () => {
     });
   });
 
+  describe('auth.persist on mutation bodies', () => {
+    const pinned = (id?: number): ParsedRequest => ({
+      query: {},
+      options: {},
+      parsed: {
+        fields: [],
+        paramsFilter: id === undefined ? [] : [{ field: 'id', operator: '$eq', value: id }],
+        search: {},
+        filter: [],
+        or: [],
+        join: [],
+        sort: [],
+        limit: 20,
+        offset: 0,
+        page: 1,
+        cache: 0,
+        authPersist: { workspaceId: 1 }
+      }
+    });
+    // The entity has a `workspace` relation joined on the pinned column.
+    const withRelation = {
+      ...mockRepository,
+      metadata: {
+        primaryColumns: [{ propertyName: 'id' }],
+        relations: [
+          { propertyName: 'workspace', joinColumns: [{ propertyName: 'workspaceId' }] },
+          { propertyName: 'author', joinColumns: [{ propertyName: 'authorId' }] }
+        ]
+      }
+    } as unknown as Repository<TestEntity>;
+    const body = { name: 'A', workspaceId: 2, workspace: { id: 2 }, author: { id: 5 } };
+
+    beforeEach(() => {
+      service = new TypeOrmCrudService(withRelation, {});
+      (mockRepository.create as jest.Mock).mockImplementation((e) => e);
+      (mockRepository.save as jest.Mock).mockImplementation(async (e) => e);
+    });
+
+    it('createOne saves the pinned value and no relation object for that column', async () => {
+      const saved: any = await service.createOne(pinned(), { id: 9, ...body } as any);
+      expect(saved).toEqual({ name: 'A', workspaceId: 1, author: { id: 5 } });
+    });
+
+    it('createMany does the same for every row', async () => {
+      const saved: any = await service.createMany(pinned(), { bulk: [{ id: 9, ...body }, body] } as any);
+      expect(saved).toEqual([
+        { name: 'A', workspaceId: 1, author: { id: 5 } },
+        { name: 'A', workspaceId: 1, author: { id: 5 } }
+      ]);
+    });
+
+    it('updateOne and replaceOne do the same', async () => {
+      (mockQueryBuilder.getOne as jest.Mock).mockResolvedValue({ id: 1, name: 'Old', workspaceId: 1 });
+      expect(await service.updateOne(pinned(1), body as any)).toEqual({ id: 1, name: 'A', workspaceId: 1, author: { id: 5 } });
+      expect(await service.replaceOne(pinned(1), body as any)).toEqual({ id: 1, name: 'A', workspaceId: 1, author: { id: 5 } });
+    });
+
+    it('createOne keeps a body id when persist pins nothing', async () => {
+      const req = pinned();
+      req.parsed.authPersist = {};
+      const saved: any = await service.createOne(req, { id: 9, name: 'A' } as any);
+      expect(saved).toEqual({ id: 9, name: 'A' });
+    });
+  });
+
   describe('buildCondition', () => {
     const build = (operator: string, value: any = 'value') =>
       (service as any).buildCondition('field', operator, value, { n: 0 });
