@@ -19,7 +19,7 @@ import { APP_GUARD, NestFactory } from '@nestjs/core';
 import { ApiOperation, ApiProperty, ApiQuery, DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { MCP_AUTH, McpAuth, McpTool, mountMcp, toolsFromDocument } from './index';
+import { MCP_AUTH, MCP_INTERNAL_AUTH, McpAuth, McpTool, mountMcp, toolsFromDocument } from './index';
 
 class PublishDto {
   @ApiProperty()
@@ -360,6 +360,124 @@ describe('@apso/mcp behind an adapter that already read the body', () => {
       await client.connect(new StreamableHTTPClientTransport(url));
       const { tools } = await client.listTools();
       expect(tools.map((tool) => tool.name)).toContain('list_notes');
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+// One address per audience: /mcp takes a user's token, /mcp/internal a service key.
+describe('@apso/mcp with an internal and an external address', () => {
+  // Stands in for an app whose guard lets a key or a user's token through and says which it saw.
+  @Controller('whoami')
+  class WhoController {
+    @Get()
+    @McpTool({ name: 'who' })
+    who(@Req() req: any) {
+      return { key: req.headers['x-api-key'] ?? null, authorization: req.headers.authorization ?? null };
+    }
+  }
+
+  const user: McpAuth = {
+    authorizationServers: ['https://login.example.com/'],
+    ignoredHeaders: ['X-Api-Key'],
+    verify: async (req) => {
+      if (req.headers.authorization !== 'Bearer good') throw new UnauthorizedException();
+    },
+  };
+  const service = (authorizationServers: string[]): McpAuth => ({
+    authorizationServers,
+    ignoredHeaders: ['authorization'],
+    verify: async (req) => {
+      if (req.headers['x-api-key'] !== 'sk_good') throw new UnauthorizedException();
+    },
+  });
+
+  const boot = async (providers: any[]) => {
+    @Module({ controllers: [WhoController], providers })
+    class TwoAddressModule {}
+    const app = await NestFactory.create(TwoAddressModule, { logger: false });
+    mountMcp(app, SwaggerModule.createDocument(app, new DocumentBuilder().setTitle('who').build()));
+    await app.listen(0);
+    return { app, base: `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}` };
+  };
+  const post = (url: string, headers: Record<string, string> = {}) =>
+    fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...headers },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    });
+  const who = async (url: string, headers: Record<string, string>) => {
+    const client = new Client({ name: 'test', version: '1' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers } }));
+    const result: any = await client.callTool({ name: 'who', arguments: {} });
+    return JSON.parse(result.content[0].text);
+  };
+
+  test('each address runs its own check and has its own sign-in metadata', async () => {
+    const { app, base } = await boot([
+      { provide: MCP_AUTH, useValue: user },
+      { provide: MCP_INTERNAL_AUTH, useValue: service(['https://app.example.com']) },
+    ]);
+    try {
+      // External: a user's token only. A key is not a credential there.
+      expect((await post(`${base}/mcp`, { 'x-api-key': 'sk_good' })).status).toBe(401);
+      const anonymous = await post(`${base}/mcp`);
+      expect(anonymous.headers.get('www-authenticate')).toBe(`Bearer resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"`);
+      // The key next to a valid token is not passed on to the route.
+      expect(await who(`${base}/mcp`, { authorization: 'Bearer good', 'x-api-key': 'sk_good' })).toEqual({ key: null, authorization: 'Bearer good' });
+
+      // Internal: the key only. A user's token is not a credential there.
+      expect((await post(`${base}/mcp/internal`, { authorization: 'Bearer good' })).status).toBe(401);
+      const refused = await post(`${base}/mcp/internal`);
+      expect(refused.status).toBe(401);
+      expect(refused.headers.get('www-authenticate')).toBe(`Bearer resource_metadata="${base}/.well-known/oauth-protected-resource/mcp/internal"`);
+      expect(await who(`${base}/mcp/internal`, { authorization: 'Bearer good', 'x-api-key': 'sk_good' })).toEqual({ key: 'sk_good', authorization: null });
+
+      const metadata = async (path: string) => (await fetch(`${base}/.well-known/oauth-protected-resource${path}`)).json();
+      const externalMetadata = { resource: `${base}/mcp`, authorization_servers: ['https://login.example.com/'], bearer_methods_supported: ['header'] };
+      expect(await metadata('/mcp')).toEqual(externalMetadata);
+      expect(await metadata('')).toEqual(externalMetadata);
+      expect(await metadata('/mcp/internal')).toEqual({
+        resource: `${base}/mcp/internal`,
+        authorization_servers: ['https://app.example.com'],
+        bearer_methods_supported: ['header'],
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  test('with only the internal check, /mcp is not served and a refusal names no sign-in', async () => {
+    const { app, base } = await boot([{ provide: MCP_INTERNAL_AUTH, useValue: service([]) }]);
+    try {
+      expect((await post(`${base}/mcp`)).status).toBe(404);
+      expect((await post(`${base}/mcp`, { 'x-api-key': 'sk_good' })).status).toBe(404);
+      const refused = await post(`${base}/mcp/internal`);
+      expect(refused.status).toBe(401);
+      expect(refused.headers.get('www-authenticate')).toBeNull();
+      expect((await post(`${base}/mcp/internal`, { 'x-api-key': 'sk_good' })).status).toBe(200);
+      for (const path of ['', '/mcp', '/mcp/internal'])
+        expect((await fetch(`${base}/.well-known/oauth-protected-resource${path}`)).status).toBe(404);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test('the internal address is described without sign-in on the external one', async () => {
+    const { app, base } = await boot([{ provide: MCP_INTERNAL_AUTH, useValue: { ...service(['https://app.example.com']), resource: 'https://api.example.com/mcp/internal' } }]);
+    try {
+      const refused = await post(`${base}/mcp/internal`, { authorization: 'Bearer expired' });
+      expect(refused.headers.get('www-authenticate')).toBe(
+        'Bearer resource_metadata="https://api.example.com/.well-known/oauth-protected-resource/mcp/internal", error="invalid_token"',
+      );
+      const res = await fetch(`${base}/.well-known/oauth-protected-resource/mcp/internal`);
+      expect(await res.json()).toEqual({
+        resource: 'https://api.example.com/mcp/internal',
+        authorization_servers: ['https://app.example.com'],
+        bearer_methods_supported: ['header'],
+      });
+      expect((await fetch(`${base}/.well-known/oauth-protected-resource`)).status).toBe(404);
     } finally {
       await app.close();
     }
