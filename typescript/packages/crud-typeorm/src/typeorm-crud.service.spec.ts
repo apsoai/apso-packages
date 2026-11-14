@@ -42,6 +42,7 @@ const mockQueryBuilder = {
   skip: jest.fn().mockReturnThis(),
   innerJoin: jest.fn().mockReturnThis(),
   innerJoinAndSelect: jest.fn().mockReturnThis(),
+  setLock: jest.fn().mockReturnThis(),
   getMany: jest.fn(),
   getManyAndCount: jest.fn(),
   getOne: jest.fn()
@@ -480,17 +481,39 @@ describe('TypeOrmCrudService', () => {
       }
     });
 
+    // updateOne reads and saves through one transaction's manager.
+    const inTransaction = () => {
+      const manager = {
+        createQueryBuilder: jest.fn(() => mockQueryBuilder),
+        save: jest.fn(async (_target: unknown, e: unknown) => e)
+      };
+      (mockRepository as any).manager = { transaction: (work: (m: unknown) => Promise<unknown>) => work(manager) };
+      return manager;
+    };
+
     it('updateOne ignores a primary key in the body (keeps the fetched row id)', async () => {
       const existing = { id: 1, name: 'Original', status: 'Active' };
       (mockQueryBuilder.getOne as jest.Mock).mockResolvedValue(existing);
-      (mockRepository.save as jest.Mock).mockImplementation(async (e) => e);
+      const manager = inTransaction();
 
       // Client echoes a fetched entity back with a different id
       await service.updateOne(reqTargeting(1), { id: 999, name: 'Changed' } as any);
 
-      const saved = (mockRepository.save as jest.Mock).mock.calls[0][0];
+      const saved = manager.save.mock.calls[0][1] as any;
       expect(saved.id).toBe(1);      // NOT 999 — identity preserved
       expect(saved.name).toBe('Changed');
+    });
+
+    it('updateOne locks the row it reads, and saves nothing when the row does not match', async () => {
+      const manager = inTransaction();
+      (mockQueryBuilder.getOne as jest.Mock).mockResolvedValue({ id: 1, name: 'Original', status: 'Active' });
+      await service.updateOne(reqTargeting(1), { name: 'Changed' } as any);
+      expect(mockQueryBuilder.setLock).toHaveBeenCalledWith('pessimistic_write');
+      expect(manager.save).toHaveBeenCalledTimes(1);
+
+      (mockQueryBuilder.getOne as jest.Mock).mockResolvedValue(null);
+      await expect(service.updateOne(reqTargeting(1), { name: 'Late' } as any)).rejects.toThrow('TestEntity not found');
+      expect(manager.save).toHaveBeenCalledTimes(1);
     });
 
     it('replaceOne targets the route id, not a body id', async () => {
@@ -559,6 +582,12 @@ describe('TypeOrmCrudService', () => {
 
     it('updateOne and replaceOne do the same', async () => {
       (mockQueryBuilder.getOne as jest.Mock).mockResolvedValue({ id: 1, name: 'Old', workspaceId: 1 });
+      // updateOne reads and saves through one transaction's manager.
+      const manager = {
+        createQueryBuilder: jest.fn(() => mockQueryBuilder),
+        save: jest.fn(async (_target: unknown, e: unknown) => e)
+      };
+      (withRelation as any).manager = { transaction: (work: (m: unknown) => Promise<unknown>) => work(manager) };
       expect(await service.updateOne(pinned(1), body as any)).toEqual({ id: 1, name: 'A', workspaceId: 1, author: { id: 5 } });
       expect(await service.replaceOne(pinned(1), body as any)).toEqual({ id: 1, name: 'A', workspaceId: 1, author: { id: 5 } });
     });
@@ -627,6 +656,60 @@ describe('TypeOrmCrudService', () => {
       expect(() => build('$in', [])).toThrow('$in expects a non-empty array');
       expect(() => build('$between', [1])).toThrow('$between expects exactly two values');
       expect(build('$bogus', 5)).toEqual({ clause: 'entity.field = :p0', params: { p0: 5 } });
+    });
+  });
+
+  // The read finds the row in every case below. What the DELETE statement
+  // reports decides whether this request deleted it. The same behaviour runs
+  // against a database in crud-parity/test/concurrent-delete.spec.ts.
+  describe('deleteOne', () => {
+    const row = { id: 7, name: 'single use', status: 'Active', createdAt: new Date('2026-11-13T00:00:00.000Z') };
+    const req = {
+      parsed: { paramsFilter: [{ field: 'id', operator: '$eq', value: 7 }], search: {} },
+      options: {}
+    } as unknown as ParsedRequest;
+
+    const run = async (deleteResult: unknown, returning = true) => {
+      (mockQueryBuilder.getOne as jest.Mock).mockResolvedValue(row);
+      const take: any = {};
+      for (const step of ['delete', 'from', 'where', 'callListeners', 'returning']) take[step] = jest.fn(() => take);
+      take.execute = jest.fn().mockResolvedValue(deleteResult);
+      const manager = {
+        createQueryBuilder: jest.fn((target?: unknown) => (target ? mockQueryBuilder : take)),
+        remove: jest.fn(),
+        connection: { driver: { isReturningSqlSupported: () => returning } }
+      };
+      (mockRepository as any).manager = { transaction: (work: (m: unknown) => Promise<void>) => work(manager) };
+      const outcome = await service.deleteOne(req).then(
+        () => 'deleted',
+        (error: Error) => error.message
+      );
+      return { outcome, manager, take };
+    };
+
+    it('deletes the row it read and still calls remove() with the entity', async () => {
+      const { outcome, manager, take } = await run({ raw: [{ id: 7 }], affected: 1 });
+      expect(outcome).toBe('deleted');
+      expect(take.where).toHaveBeenCalledWith({ id: 7 });
+      expect(take.callListeners).toHaveBeenCalledWith(false);
+      expect(manager.remove).toHaveBeenCalledWith(row);
+    });
+
+    it('answers not found when another request deleted the row after the read', async () => {
+      const { outcome, manager } = await run({ raw: [], affected: 0 });
+      expect(outcome).toBe('TestEntity not found');
+      expect(manager.remove).not.toHaveBeenCalled();
+    });
+
+    it('reads the deleted rows when the driver reports no row count', async () => {
+      expect((await run({ raw: [] })).outcome).toBe('TestEntity not found');
+      expect((await run({ raw: [{ id: 7 }] })).outcome).toBe('deleted');
+    });
+
+    it('does not ask for the row back where the database cannot return it', async () => {
+      const { outcome, take } = await run({ raw: {}, affected: 1 }, false);
+      expect(outcome).toBe('deleted');
+      expect(take.returning).not.toHaveBeenCalled();
     });
   });
 });

@@ -53,7 +53,18 @@ const NOT_MAP: Record<string, FilterOperator> = {
   in: '$notin',
   like: '$excl',
   ilike: '$exclL',
+  // NOT (a > b) and a <= b agree on every row, NULLs included (both drop them).
+  gt: '$lte',
+  gte: '$lt',
+  lt: '$gte',
+  lte: '$gt',
 };
+
+const unsupported = (feature: string, token: string, instead: string) =>
+  new RequestQueryException(`${feature} not supported: '${token}' in select. ${instead}`);
+
+const jsonPath = (where: string) =>
+  new RequestQueryException(`JSON paths (-> and ->>) are not supported: '${where}'. Filter and order by whole columns.`);
 
 export class PostgrestRequestParser {
   private options: CrudRequestOptions;
@@ -87,6 +98,10 @@ export class PostgrestRequestParser {
     // `join` in place, attaching each embedded filter to its relation's `on`
     // list, and returns the root-level filters. `!inner` is handled separately (#59).
     const conditions = this.partitionEmbeddedFilters(allConditions, join);
+    for (const s of sort) {
+      const dot = s.field.lastIndexOf('.');
+      if (dot !== -1) this.requireEmbed(s.field.slice(0, dot), join, `order=${s.field.slice(0, dot)}(${s.field.slice(dot + 1)})`);
+    }
 
     // ?or=(c1,c2)/?and=(c1,c2) logical groups (PostgREST combinators, #56). Each
     // is ANDed with the top-level column filters, matching PostgREST semantics.
@@ -95,7 +110,7 @@ export class PostgrestRequestParser {
       this.parseLogical(query.and, '$and'),
     ].filter((g): g is SearchCondition => g !== null);
 
-    const search = this.buildSearchTree(conditions, authContext, groups);
+    const search = this.buildSearchTree(conditions, authContext, groups, params);
 
     const parsed: ParsedRequestParams = {
       fields,
@@ -157,27 +172,35 @@ export class PostgrestRequestParser {
     for (const raw of this.splitTopLevel(select)) {
       const tok = raw.trim();
       if (tok === '') continue;
+      // PostgREST select features this engine does not have. Each is refused
+      // by name: answering 200 with different rows or keys would be worse.
+      if (tok.startsWith('...')) throw unsupported('Spreading an embed (...rel(cols)) is', tok, 'Embed it as rel(cols) and read the nested object.');
+      if (/(^|[.:])(count|sum|avg|min|max)\(\)/.test(tok)) throw unsupported('Aggregate functions are', tok, "For a row count send 'Prefer: count=exact' and read Content-Range.");
+      if (tok.includes('->')) throw unsupported('JSON paths (-> and ->>) are', tok, 'Select the whole JSON column.');
+      if (tok.includes('::')) throw unsupported('Casts (column::type) are', tok, 'Select the column and convert it in the client.');
       const open = tok.indexOf('(');
       if (open === -1) {
-        // plain column: drop `::type` cast, then take the column from an
-        // `alias:column` rename (the column is what we select).
-        const noCast = tok.split('::')[0];
-        const parts = noCast.split(':');
+        // plain column, or an `alias:column` rename (the column is what we select).
+        const parts = tok.split(':');
         const col = parts[parts.length - 1].trim();
-        if (col === '*' || col === '') continue; // `*` = all columns → no explicit field
+        if (col === '*') continue; // `*` = all columns → no explicit field
+        if (parts.length > 2 || !/^\w+$/.test(col)) throw new RequestQueryException(`Invalid column in select: '${tok}'`);
         fields.push(col);
         // `alias:column` renames the OUTPUT key: PostgREST returns the row
         // keyed by `alias`, not `column`. Record it (root-level only — the
         // engine renames root keys) so the engine emits `column AS alias` (#57).
         if (parts.length > 1) {
           const alias = parts[0].trim();
-          if (alias && alias !== col && prefix === '') fieldAliases[col] = alias;
+          if (prefix !== '') throw unsupported('Renaming a column inside an embed is', tok, 'Renames work on top-level columns only.');
+          if (alias && alias !== col) fieldAliases[col] = alias;
         }
       } else {
-        // embed: `[alias:]relation[!hint](innerSelect)`
+        // embed: `relation[!hint](innerSelect)`
         const head = tok.slice(0, open);
         const inner = tok.slice(open + 1, tok.lastIndexOf(')'));
-        let relPart = head.includes(':') ? head.split(':').pop()! : head;
+        if (head.includes(':')) throw unsupported('Embed aliases (alias:rel(...)) are', tok, 'Embed the relation under its own name.');
+        if (inner.trim() === '') throw unsupported('Empty embeds (rel()) are', tok, 'List columns or use rel(*).');
+        const relPart = head;
         // `!inner` makes an embedded filter a PARENT-level filter (drops
         // non-matching parents); `!left` (or no hint) is the default and keeps
         // all parents. Capture it so partitionEmbeddedFilters routes the filter
@@ -189,7 +212,7 @@ export class PostgrestRequestParser {
         const sub = this.parseSelectTree(inner, path);
         // `rel(*)` / `rel()` → no explicit select → full leftJoinAndSelect,
         // matching a nestjsx join with no column list.
-        const cond: JoinCondition & { embedInner?: boolean } =
+        const cond: JoinCondition =
           sub.fields.length > 0 ? { field: path, select: sub.fields } : { field: path };
         if (hint === 'inner') cond.embedInner = true;
         join.push(cond);
@@ -215,15 +238,15 @@ export class PostgrestRequestParser {
     conditions: FilterCondition[],
     join: JoinCondition[],
   ): FilterCondition[] {
-    if (join.length === 0) return conditions;
-    const byPath = new Map<string, JoinCondition & { embedInner?: boolean }>();
-    for (const j of join) byPath.set(j.field, j as any);
+    const byPath = new Map<string, JoinCondition>();
+    for (const j of join) byPath.set(j.field, j);
 
     const root: FilterCondition[] = [];
     for (const c of conditions) {
       const dot = c.field.lastIndexOf('.');
       const prefix = dot === -1 ? '' : c.field.slice(0, dot);
       const target = prefix ? byPath.get(prefix) : undefined;
+      if (prefix) this.requireEmbed(prefix, join, `${c.field}=`);
       if (target && !target.embedInner) {
         // Embedded (default/`!left`) filter: predicate goes in the JOIN ON so
         // parents are preserved. Store just the column name; the engine
@@ -238,13 +261,31 @@ export class PostgrestRequestParser {
     return root;
   }
 
-  /** Split on commas that are NOT inside parentheses (for nested embeds). */
+  /**
+   * A filter or order on `rel.col` only means something when `rel` is embedded
+   * in select (or always joined by the controller). Otherwise it is a 400 that
+   * says so, never a SQL error.
+   */
+  private requireEmbed(path: string, join: JoinCondition[], what: string): void {
+    if (join.some(j => j.field === path)) return;
+    if ((this.options.query?.join as any)?.[path]?.eager) return;
+    throw new RequestQueryException(
+      `'${what}' refers to '${path}', which is not embedded. Add it to select, for example select=*,${path.split('.')[0]}(*).`,
+    );
+  }
+
+  /** Split on commas that are NOT inside parentheses or double quotes. */
   private splitTopLevel(s: string): string[] {
     const out: string[] = [];
     let depth = 0;
     let cur = '';
+    let quoted = false;
     for (const ch of s) {
-      if (ch === '(') { depth++; cur += ch; }
+      // A double-quoted value may hold commas and parentheses (PostgREST
+      // reserved characters): or=(name.eq."Doe, Jane",age.gt.3).
+      if (ch === '"') { quoted = !quoted; cur += ch; }
+      else if (quoted) cur += ch;
+      else if (ch === '(') { depth++; cur += ch; }
       else if (ch === ')') { depth--; cur += ch; }
       else if (ch === ',' && depth === 0) { out.push(cur); cur = ''; }
       else cur += ch;
@@ -268,6 +309,7 @@ export class PostgrestRequestParser {
     for (const raw of items) {
       const t = String(raw).trim();
       if (!t) continue;
+      if (t.includes('->')) throw jsonPath(t);
       let field: string;
       let parts: string[];
       const open = t.indexOf('(');
@@ -320,6 +362,14 @@ export class PostgrestRequestParser {
     const result: FilterCondition[] = [];
     for (const [key, rawVal] of Object.entries(query)) {
       if (RESERVED.has(key)) continue;
+      if (key === 'not.and' || key === 'not.or') {
+        throw new RequestQueryException(`Negated groups (${key}=(...)) are not supported. Negate each condition instead, for example or=(a.not.eq.1,b.not.eq.2).`);
+      }
+      if (key.includes('->')) throw jsonPath(key);
+      const modifier = /\.(order|limit|offset|or|and)$/.exec(key);
+      if (modifier) {
+        throw new RequestQueryException(`'${key}' is not supported: order, limit, offset, or and and apply to the top level only, not to an embed.`);
+      }
       const values = Array.isArray(rawVal) ? rawVal : [rawVal];
       for (const v of values) {
         result.push(this.parseCondition(key, String(v)));
@@ -328,8 +378,12 @@ export class PostgrestRequestParser {
     return result;
   }
 
-  /** Parse `op.value` (or `not.op.value`) for a column. */
-  private parseCondition(field: string, spec: string): FilterCondition {
+  /**
+   * Parse `op.value` (or `not.op.value`) for a column. Inside an or=()/and=()
+   * group (`inGroup`) a value wrapped in double quotes is taken literally,
+   * which is how PostgREST passes reserved characters there.
+   */
+  private parseCondition(field: string, spec: string, inGroup = false): FilterCondition {
     const dot = spec.indexOf('.');
     if (dot === -1) {
       throw new RequestQueryException(`Invalid filter for '${field}': expected op.value`);
@@ -348,11 +402,22 @@ export class PostgrestRequestParser {
       rest = rest.slice(dot2 + 1);
     }
 
+    // Quoted value inside a group: strip the quotes and keep it a string.
+    // ponytail: no \" escapes inside the quotes; add when a value needs a literal quote.
+    let literal = false;
+    if (inGroup && op !== 'in' && rest.length >= 2 && rest.startsWith('"') && rest.endsWith('"')) {
+      rest = rest.slice(1, -1);
+      literal = true;
+    }
+
     // `is` — is.null / is.true / is.false (is.unknown => null)
     if (op === 'is') {
       const lit = rest.toLowerCase();
       if (lit === 'null' || lit === 'unknown') {
         return { field, operator: negated ? '$notnull' : '$isnull', value: undefined };
+      }
+      if (lit === 'not_null') {
+        return { field, operator: negated ? '$isnull' : '$notnull', value: undefined };
       }
       if (lit === 'true' || lit === 'false') {
         return { field, operator: negated ? '$ne' : '$eq', value: lit === 'true' };
@@ -376,7 +441,7 @@ export class PostgrestRequestParser {
     if (!mapped) {
       throw new RequestQueryException(`Unsupported PostgREST operator '${op}' for '${field}'`);
     }
-    return { field, operator: mapped, value: this.coerce(rest) };
+    return { field, operator: mapped, value: literal ? rest : this.coerce(rest) };
   }
 
   /**
@@ -408,7 +473,7 @@ export class PostgrestRequestParser {
       if (dot === -1) {
         throw new RequestQueryException(`Invalid condition in ${label}= group: ${part}`);
       }
-      const c = this.parseCondition(part.slice(0, dot), part.slice(dot + 1));
+      const c = this.parseCondition(part.slice(0, dot), part.slice(dot + 1), true);
       return { [c.field]: { [c.operator]: c.value } } as SearchCondition;
     });
     return { [key]: branches } as SearchCondition;
@@ -470,8 +535,19 @@ export class PostgrestRequestParser {
     conditions: FilterCondition[],
     authContext: { filter?: SearchCondition; or?: SearchCondition },
     groups: SearchCondition[] = [],
+    params: any = {},
   ): SearchCondition {
-    const and: SearchCondition[] = conditions.map(c => ({ [c.field]: { [c.operator]: c.value } }));
+    const and: SearchCondition[] = [];
+    // Route params (/:id) always constrain the query.
+    for (const c of this.parseParams(params)) and.push({ [c.field]: { [c.operator]: c.value } });
+    // The controller's own query.filter always applies, as in the nestjsx parser.
+    const optionsFilter = this.options.query?.filter;
+    if (Array.isArray(optionsFilter)) {
+      for (const c of optionsFilter) if (c && c.field && c.operator) and.push({ [c.field]: { [c.operator]: c.value } });
+    } else if (optionsFilter && typeof optionsFilter === 'object') {
+      and.push(optionsFilter as SearchCondition);
+    }
+    for (const c of conditions) and.push({ [c.field]: { [c.operator]: c.value } });
     // Logical combinators (?or=/?and=) are ANDed alongside the column filters.
     for (const g of groups) and.push(g);
     if (authContext.or) {

@@ -21,5 +21,6 @@ apso-packages/
 |---|---|---|---|
 | **domain-events** (transactional outbox + delivery) | `@apso/domain-events` | `apso-domain-events` | `.../go/domainevents` |
 | **schema-tools** (.apsorc lint, autofix and edit operations for AI agents) | `@apso/schema-tools` | n/a | n/a |
+| **mcp** (expose API routes as MCP tools with a decorator; calls run through the API's guards) | `@apso/mcp` | n/a | n/a |
 
 See [`CONTRACT.md`](CONTRACT.md) for the behavior every language implementation must honor.

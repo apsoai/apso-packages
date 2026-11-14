@@ -18,6 +18,7 @@ each package checks whether its directory changed since that package's last rele
 | `@apso/crud` | `typescript/packages/crud/` | `ts-crud-vX.Y.Z` | npm |
 | `@apso/sdk` | `typescript/packages/sdk/` | `ts-sdk-vX.Y.Z` | npm |
 | `@apso/schema-tools` | `typescript/packages/schema-tools/` | `ts-schema-tools-vX.Y.Z` | npm |
+| `@apso/mcp` | `typescript/packages/mcp/` | `ts-mcp-vX.Y.Z` | npm |
 | `apso-domain-events` | `python/packages/domain-events/` | `py-domain-events-vX.Y.Z` | PyPI |
 | `domainevents` (Go) | `go/domainevents/` | `go/domainevents/vX.Y.Z` | Go proxy (tag only) |
 
@@ -32,8 +33,13 @@ If a package changed, it is:
    fails the package loudly. Dry run: `bash .github/scripts/auto-release.sh guard npm
    @apso/sdk 1.2.0 minor`. Offline tests: `.github/scripts/test-version-guard.sh` (runs in
    the TypeScript CI workflow).
-2. **Built, tested, and published** (npm publish / PyPI / Go = the tag).
-3. **Committed** (`chore(release): … [skip ci]`), **tagged**, and **GitHub-released**.
+2. **Pinned to its siblings** (npm only): every dependency on another package of this
+   workspace is set to `^<that package's current version>`, so `@apso/crud` 1.2.0 built
+   next to `@apso/postgrest-request` 1.2.0 requires `^1.2.0` of it. Packages release in
+   dependency order, so a sibling released in the same run is already at its new version.
+   Only the package being released is rewritten. Offline test: `test-version-guard.sh`.
+3. **Built, tested, and published** (npm publish / PyPI / Go = the tag).
+4. **Committed** (`chore(release): … [skip ci]`), **tagged**, and **GitHub-released**.
 
 A package whose directory didn't change is skipped. The release commit is marked `[skip ci]`
 and pushed with the default token, so it never re-triggers the workflow.
@@ -42,7 +48,7 @@ and pushed with the default token, so it never re-triggers the workflow.
 
 - **npm:** **Trusted Publishing** (GitHub OIDC), no token. On npmjs.com, for *each* package
   (`@apso/domain-events`, `@apso/crud-core`, `@apso/crud-request`, `@apso/postgrest-request`,
-  `@apso/crud-typeorm`, `@apso/crud`, `@apso/sdk`, `@apso/schema-tools`) → Settings → Trusted Publisher → GitHub
+  `@apso/crud-typeorm`, `@apso/crud`, `@apso/sdk`, `@apso/schema-tools`, `@apso/mcp`) → Settings → Trusted Publisher → GitHub
   Actions: organization `apsoai`, repository `apso-packages`, workflow filename
   `auto-release.yml`, no environment, with npm publish allowed. Once a release succeeds via
   OIDC, Publishing access can be set to disallow tokens. The publish step needs

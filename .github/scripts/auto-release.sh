@@ -31,10 +31,11 @@ PKGS=(
   "CRUD|typescript/packages/crud|ts-crud-v|npm|@apso/crud"
   "SDK|typescript/packages/sdk|ts-sdk-v|npm|@apso/sdk"
   "SCHEMATOOLS|typescript/packages/schema-tools|ts-schema-tools-v|npm|@apso/schema-tools"
+  "MCP|typescript/packages/mcp|ts-mcp-v|npm|@apso/mcp"
   "PY|python/packages/domain-events|py-domain-events-v|pypi|apso-domain-events"
   "GO|go/domainevents|go/domainevents/v|go|"
 )
-ALL_IDS="TS CRUDCORE CRUDREQ PGREQ CRUDTORM CRUD SDK SCHEMATOOLS PY GO"
+ALL_IDS="TS CRUDCORE CRUDREQ PGREQ CRUDTORM CRUD SDK SCHEMATOOLS MCP PY GO"
 
 bump_semver() { # <x.y.z> <major|minor|patch>
   local IFS=.; read -r MA MI PA <<<"$1"
@@ -120,6 +121,24 @@ guard_version() { # <type> <name> <new> <level>
   esac
 }
 
+# Set every dependency on a package of this workspace to ^<that package's version>,
+# so a release requires the sibling versions it was built and tested with. `npm
+# version` bumps only the package's own version; without this, @apso/crud kept
+# "^1.0.0" on its siblings and an old lockfile kept an old parser under a new crud.
+# Siblings come earlier in PKGS, so their manifests already hold this run's versions.
+pin_siblings() { # <package dir>
+  ( cd "$1" && node -e '
+    const fs = require("fs");
+    const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+    for (const dep of Object.keys(pkg.dependencies || {})) {
+      const sibling = "../" + dep.replace(/^@apso\//, "") + "/package.json";
+      if (!dep.startsWith("@apso/") || !fs.existsSync(sibling)) continue;
+      pkg.dependencies[dep] = "^" + JSON.parse(fs.readFileSync(sibling, "utf8")).version;
+    }
+    fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+  ' )
+}
+
 # --- per-package publish (return non-zero on failure) ---------------------------
 do_ts() { # <version> <path> <npm-name> <id>
   local v="$1" path="$2" name="$3" id="$4"
@@ -127,6 +146,7 @@ do_ts() { # <version> <path> <npm-name> <id>
   # so a package that depends on a *skipped* (unchanged) package still resolves
   # its types. Here we only re-verify this package and publish it.
   ( cd typescript && npm test -w "$name" ) || return 1
+  pin_siblings "$path" || return 1 # before npm version, which also rewrites the lockfile
   ( cd "$path" && npm version "$v" --no-git-tag-version --allow-same-version ) || return 1
   if npm view "$name@$v" version >/dev/null 2>&1; then
     echo "[$id] $name@$v already on npm — skip publish"
@@ -260,6 +280,7 @@ finalize() {
 case "$PHASE" in
   prepare) prepare;;
   guard) shift; guard_version "$@";; # dry run: guard <type> <name> <version> <level>
+  pin-siblings) shift; pin_siblings "$@";; # pin-siblings <package dir>
   finalize) finalize;;
   *) echo "unknown phase: $PHASE" >&2; exit 1;;
 esac
