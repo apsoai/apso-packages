@@ -288,19 +288,32 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   }
 
   async updateOne(req: ParsedRequest, dto: DeepPartial<T>): Promise<UpdateOneResponse<T>> {
-    const queryBuilder = this.repository.createQueryBuilder('entity');
-    this.applyWhere(queryBuilder, req);
+    // A PATCH can carry a condition next to the id (PATCH /tokens/7 with
+    // revoked=is.null): it answers 404 when the row does not meet it. The
+    // read locks the row and shares a transaction with the save, so of two
+    // requests whose update ends the condition, the second waits for the
+    // first, reads the row it wrote, and answers 404. Without the lock both
+    // read the row before either saved, and both answered 200.
+    // ponytail: the lock needs a database session per request. On pglite
+    // every request shares one session, so two overlapping requests can
+    // still both pass there.
+    return this.repository.manager.transaction(async manager => {
+      const queryBuilder = manager
+        .createQueryBuilder<T>(this.repository.target, 'entity')
+        .setLock('pessimistic_write');
+      this.applyWhere(queryBuilder, req);
 
-    const entity = await queryBuilder.getOne();
-    if (!entity) {
-      throw new NotFoundException(`${this.entityName()} not found`);
-    }
+      const entity = await queryBuilder.getOne();
+      if (!entity) {
+        throw new NotFoundException(`${this.entityName()} not found`);
+      }
 
-    // nestjsx strips primary keys from the update body: a client echoing a
-    // fetched entity back through PATCH (or sending {id: 999}) must never
-    // rewrite the row's identity. The target row is always the fetched one.
-    const body = this.stripPrimaryKeys(this.withAuthPersist(req, dto));
-    return await this.repository.save({ ...entity, ...body } as any);
+      // nestjsx strips primary keys from the update body: a client echoing a
+      // fetched entity back through PATCH (or sending {id: 999}) must never
+      // rewrite the row's identity. The target row is always the fetched one.
+      const body = this.stripPrimaryKeys(this.withAuthPersist(req, dto));
+      return await manager.save(this.repository.target, { ...entity, ...body } as any);
+    });
   }
 
   async replaceOne(req: ParsedRequest, dto: T): Promise<ReplaceOneResponse<T>> {

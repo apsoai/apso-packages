@@ -42,6 +42,7 @@ const mockQueryBuilder = {
   skip: jest.fn().mockReturnThis(),
   innerJoin: jest.fn().mockReturnThis(),
   innerJoinAndSelect: jest.fn().mockReturnThis(),
+  setLock: jest.fn().mockReturnThis(),
   getMany: jest.fn(),
   getManyAndCount: jest.fn(),
   getOne: jest.fn()
@@ -480,17 +481,39 @@ describe('TypeOrmCrudService', () => {
       }
     });
 
+    // updateOne reads and saves through one transaction's manager.
+    const inTransaction = () => {
+      const manager = {
+        createQueryBuilder: jest.fn(() => mockQueryBuilder),
+        save: jest.fn(async (_target: unknown, e: unknown) => e)
+      };
+      (mockRepository as any).manager = { transaction: (work: (m: unknown) => Promise<unknown>) => work(manager) };
+      return manager;
+    };
+
     it('updateOne ignores a primary key in the body (keeps the fetched row id)', async () => {
       const existing = { id: 1, name: 'Original', status: 'Active' };
       (mockQueryBuilder.getOne as jest.Mock).mockResolvedValue(existing);
-      (mockRepository.save as jest.Mock).mockImplementation(async (e) => e);
+      const manager = inTransaction();
 
       // Client echoes a fetched entity back with a different id
       await service.updateOne(reqTargeting(1), { id: 999, name: 'Changed' } as any);
 
-      const saved = (mockRepository.save as jest.Mock).mock.calls[0][0];
+      const saved = manager.save.mock.calls[0][1] as any;
       expect(saved.id).toBe(1);      // NOT 999 — identity preserved
       expect(saved.name).toBe('Changed');
+    });
+
+    it('updateOne locks the row it reads, and saves nothing when the row does not match', async () => {
+      const manager = inTransaction();
+      (mockQueryBuilder.getOne as jest.Mock).mockResolvedValue({ id: 1, name: 'Original', status: 'Active' });
+      await service.updateOne(reqTargeting(1), { name: 'Changed' } as any);
+      expect(mockQueryBuilder.setLock).toHaveBeenCalledWith('pessimistic_write');
+      expect(manager.save).toHaveBeenCalledTimes(1);
+
+      (mockQueryBuilder.getOne as jest.Mock).mockResolvedValue(null);
+      await expect(service.updateOne(reqTargeting(1), { name: 'Late' } as any)).rejects.toThrow('TestEntity not found');
+      expect(manager.save).toHaveBeenCalledTimes(1);
     });
 
     it('replaceOne targets the route id, not a body id', async () => {
