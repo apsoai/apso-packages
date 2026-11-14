@@ -582,6 +582,12 @@ describe('TypeOrmCrudService', () => {
 
     it('updateOne and replaceOne do the same', async () => {
       (mockQueryBuilder.getOne as jest.Mock).mockResolvedValue({ id: 1, name: 'Old', workspaceId: 1 });
+      // updateOne reads and saves through one transaction's manager.
+      const manager = {
+        createQueryBuilder: jest.fn(() => mockQueryBuilder),
+        save: jest.fn(async (_target: unknown, e: unknown) => e)
+      };
+      (withRelation as any).manager = { transaction: (work: (m: unknown) => Promise<unknown>) => work(manager) };
       expect(await service.updateOne(pinned(1), body as any)).toEqual({ id: 1, name: 'A', workspaceId: 1, author: { id: 5 } });
       expect(await service.replaceOne(pinned(1), body as any)).toEqual({ id: 1, name: 'A', workspaceId: 1, author: { id: 5 } });
     });
