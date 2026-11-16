@@ -264,7 +264,7 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   }
 
   async createOne(req: ParsedRequest, dto: DeepPartial<T>): Promise<CreateOneResponse<T>> {
-    const entity = this.repository.create(this.withAuthPersist(req, dto) as any);
+    const entity = this.repository.create(this.forCreate(req, dto) as any);
     // Echo the saved entity as-is. This is an INTENDED divergence from
     // @nestjsx/crud (#44): on a timestamp column, nestjsx re-hydrates the
     // echoed value through the server's local timezone, so a posted UTC
@@ -280,7 +280,7 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     if (!dto || !Array.isArray(dto.bulk) || dto.bulk.length === 0) {
       throw new BadRequestException(['bulk should not be empty']);
     }
-    const bulk = (dto.bulk as any[]).map(item => this.withAuthPersist(req, item));
+    const bulk = (dto.bulk as any[]).map(item => this.forCreate(req, item));
     const entities = this.repository.create(bulk);
     // Echo the saved entities as-given (same as createOne — #44 timestamp
     // divergence from nestjsx is intended, not replicated).
@@ -288,19 +288,32 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   }
 
   async updateOne(req: ParsedRequest, dto: DeepPartial<T>): Promise<UpdateOneResponse<T>> {
-    const queryBuilder = this.repository.createQueryBuilder('entity');
-    this.applyWhere(queryBuilder, req);
+    // A PATCH can carry a condition next to the id (PATCH /tokens/7 with
+    // revoked=is.null): it answers 404 when the row does not meet it. The
+    // read locks the row and shares a transaction with the save, so of two
+    // requests whose update ends the condition, the second waits for the
+    // first, reads the row it wrote, and answers 404. Without the lock both
+    // read the row before either saved, and both answered 200.
+    // ponytail: the lock needs a database session per request. On pglite
+    // every request shares one session, so two overlapping requests can
+    // still both pass there.
+    return this.repository.manager.transaction(async manager => {
+      const queryBuilder = manager
+        .createQueryBuilder<T>(this.repository.target, 'entity')
+        .setLock('pessimistic_write');
+      this.applyWhere(queryBuilder, req);
 
-    const entity = await queryBuilder.getOne();
-    if (!entity) {
-      throw new NotFoundException(`${this.entityName()} not found`);
-    }
+      const entity = await queryBuilder.getOne();
+      if (!entity) {
+        throw new NotFoundException(`${this.entityName()} not found`);
+      }
 
-    // nestjsx strips primary keys from the update body: a client echoing a
-    // fetched entity back through PATCH (or sending {id: 999}) must never
-    // rewrite the row's identity. The target row is always the fetched one.
-    const body = this.stripPrimaryKeys(this.withAuthPersist(req, dto));
-    return await this.repository.save({ ...entity, ...body } as any);
+      // nestjsx strips primary keys from the update body: a client echoing a
+      // fetched entity back through PATCH (or sending {id: 999}) must never
+      // rewrite the row's identity. The target row is always the fetched one.
+      const body = this.stripPrimaryKeys(this.withAuthPersist(req, dto));
+      return await manager.save(this.repository.target, { ...entity, ...body } as any);
+    });
   }
 
   async replaceOne(req: ParsedRequest, dto: T): Promise<ReplaceOneResponse<T>> {
@@ -329,7 +342,27 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   protected withAuthPersist<D>(req: ParsedRequest, dto: D): D {
     const persist = req.parsed.authPersist;
     if (!persist || typeof persist !== 'object') return dto;
-    return { ...dto, ...persist };
+    const out: any = { ...dto, ...persist };
+    // TypeORM saves a relation object in place of its join column. A relation
+    // whose column is pinned is dropped, so the pinned value is the one saved.
+    for (const relation of this.repository.metadata?.relations ?? []) {
+      if (relation.joinColumns.some(column => column.propertyName in persist)) {
+        delete out[relation.propertyName];
+      }
+    }
+    return out;
+  }
+
+  /**
+   * A create body with auth.persist applied. When persist pins a field, the
+   * body's primary key is dropped: save() updates the row a primary key
+   * names, and that row may not be one the auth filter allows.
+   */
+  protected forCreate<D>(req: ParsedRequest, dto: D): D {
+    const body = this.withAuthPersist(req, dto);
+    const persist = req.parsed.authPersist;
+    const pins = persist && typeof persist === 'object' && Object.keys(persist).length > 0;
+    return pins ? this.stripPrimaryKeys(body) : body;
   }
 
   /** Remove primary-key fields from a mutation body (nestjsx behavior). */
@@ -352,15 +385,41 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   }
 
   async deleteOne(req: ParsedRequest): Promise<DeleteOneResponse<T>> {
-    const queryBuilder = this.repository.createQueryBuilder('entity');
-    this.applyWhere(queryBuilder, req);
+    await this.repository.manager.transaction(async manager => {
+      const queryBuilder = manager.createQueryBuilder<T>(this.repository.target, 'entity');
+      this.applyWhere(queryBuilder, req);
 
-    const entity = await queryBuilder.getOne();
-    if (!entity) {
-      throw new NotFoundException(`${this.entityName()} not found`);
-    }
+      const entity = await queryBuilder.getOne();
+      if (!entity) {
+        throw new NotFoundException(`${this.entityName()} not found`);
+      }
 
-    await this.repository.remove(entity);
+      // This statement decides who deleted the row. Of two requests that
+      // delete the same row at the same time, the database lets one DELETE
+      // take it; the other removes 0 rows and answers 404. remove() alone
+      // never reports that, so both requests used to answer 200 and a caller
+      // could not tell whether it was the one that deleted the row.
+      const take = manager
+        .createQueryBuilder()
+        .delete()
+        .from(this.repository.target)
+        .where(this.primaryKeyValues(entity))
+        .callListeners(false);
+      // Not every driver reports a row count (typeorm-pglite does not), so
+      // ask for the deleted row back where the database can return it.
+      if (manager.connection.driver.isReturningSqlSupported('delete')) {
+        take.returning(this.rootPrimaryKeys());
+      }
+      const taken = await take.execute();
+      if ((taken.affected ?? taken.raw?.length) === 0) {
+        throw new NotFoundException(`${this.entityName()} not found`);
+      }
+
+      // Still run remove(): it calls the remove listeners and subscribers
+      // with the entity (@apso/domain-events reads it there). Its own DELETE
+      // finds no row.
+      await manager.remove(entity);
+    });
     // nestjsx returns void by default (returnDeleted is options work, #21)
     return undefined;
   }
