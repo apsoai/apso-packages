@@ -1,0 +1,40 @@
+{
+  "name": "@apso/logging",
+  "version": "0.1.0",
+  "description": "Request logging for Apso NestJS services: one JSON line per request that says who called, a request id on every line, and a quiet start-up.",
+  "license": "Apache-2.0",
+  "author": "Apso",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "test": "jest",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "peerDependencies": {
+    "@nestjs/common": "^9.0.0 || ^10.0.0"
+  },
+  "devDependencies": {
+    "@nestjs/common": "^10.0.0",
+    "@nestjs/core": "^10.0.0",
+    "@nestjs/platform-express": "^10.0.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/apsoai/apso-packages.git",
+    "directory": "typescript/packages/logging"
+  },
+  "keywords": [
+    "apso",
+    "nestjs",
+    "logging",
+    "audit",
+    "request-id"
+  ]
+}
