@@ -79,6 +79,9 @@ export const POSTGREST_CONFORMANCE: ConformanceCase[] = [
 
   // --- documented error behavior ---
   { id: 'pg-unknown-filter-column', path: '/posts?nonexistent=eq.1', status: 400 },
+  // An embed outside the join allowlist is refused (nestjsx drops such a join
+  // silently; a PostgREST caller must not get rows without the embed it asked for).
+  { id: 'pg-non-allowlisted-embed', path: '/posts?select=id,reviews(id)&order=id.asc', status: 400 },
 ];
 
 /** Same logical query, both dialects, same @apso app -> same rows. */
@@ -115,7 +118,4 @@ export const ACCESS_PARITY: AccessCase[] = [
   { id: 'acc-guard-allowed-embed', kind: 'row-parity', postgrest: '/secure-posts?select=id,author(name)&order=id.asc', nestjsx: '/secure-posts?fields=id&join=author||name&sort=id,ASC', headers: { 'x-test-auth': 'letmein' } },
   { id: 'acc-scope-rows', kind: 'row-parity', postgrest: '/scoped-posts?select=id&order=id.asc', nestjsx: '/scoped-posts?fields=id&sort=id,ASC' },
   { id: 'acc-scope-cannot-widen', kind: 'row-parity', postgrest: '/scoped-posts?select=id&authorId=eq.2&order=id.asc', nestjsx: '/scoped-posts?fields=id&filter=authorId||$eq||2&sort=id,ASC' },
-  // Non-allowlisted embed must behave EXACTLY like the non-allowlisted join,
-  // whatever that behavior is (currently: silently ignored, nestjsx-style).
-  { id: 'acc-non-allowlisted-embed', kind: 'row-parity', postgrest: '/posts?select=id,reviews(id)&order=id.asc', nestjsx: '/posts?fields=id&join=reviews&sort=id,ASC' },
 ];

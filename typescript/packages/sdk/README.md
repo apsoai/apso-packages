@@ -13,6 +13,63 @@ A TypeScript SDK for interacting with Apso services via their OpenAPI-compliant 
 npm install @apso/sdk
 ```
 
+## Authentication
+
+A client sends an API key, a user token, or both. Which one to use depends on where the code runs.
+
+**On a server**, use the service's API key. The key is a secret and is sent as `x-api-key`.
+
+```typescript
+import { createClient } from '@apso/sdk';
+
+const apso = createClient({
+  baseURL: 'https://api.example.com',
+  apiKey: process.env.APSO_API_KEY,
+});
+
+const orders = await apso.entity('orders').where({ status: 'open' }).findMany();
+```
+
+**In a browser or mobile app**, use the signed-in user's token and no key. The token is sent as `Authorization: Bearer`. Pass a function to have it called on every request, so a refreshed token is picked up without creating a new client.
+
+```typescript
+import { createClient } from '@apso/sdk';
+
+const apso = createClient({
+  baseURL: 'https://api.example.com',
+  accessToken: () => session.getAccessToken(), // a string works too
+});
+
+const posts = await apso.entity('posts').findMany();
+await apso.entity('posts').create({ title: 'Hello' });
+```
+
+Setting `apiKey` in a browser logs a warning, because anyone who opens the page can read the key.
+
+Neither option is required. A client with no credentials sends the request as it is and the service decides whether to allow it.
+
+Clients created with `accessToken` or custom `headers` are never cached, so each call to `createClient` or `ApsoClientFactory.getClient` returns a new client and one user's client is never handed to another. Create the client once per user or per request and reuse it. Key-only clients are still cached by base URL and key. When `accessToken` is a function, the `useCache` option of `get` is ignored, because one client may then serve several users.
+
+### Errors and request ids
+
+Every request sends an `x-request-id` header. The SDK generates one unless you set your own in `headers`.
+
+A 401 or 403 response throws an `ApsoAuthError` with the service's message and the request id, which you can search for in the service's log.
+
+```typescript
+import { ApsoAuthError } from '@apso/sdk';
+
+try {
+  await apso.entity('posts').create({ title: 'Hello' });
+} catch (err) {
+  if (err instanceof ApsoAuthError) {
+    console.error(err.status, err.message, err.requestId); // 403 'Missing role: admin' '7c9e...'
+  }
+}
+```
+
+The Supabase-style `from()` builder does not throw. It returns the same information on `error.message` and `error.requestId`.
+
 ## Usage
 ```typescript
 import { ApsoClientFactory, QueryBuilder } from '@apso/sdk';
@@ -53,6 +110,7 @@ const response = await client.get('/WorkspaceServices', {
 });
 
 // This will generate a standards-compliant query string for NestJS CRUD APIs.
+```
 
 ## Supabase-style queries (PostgREST dialect)
 

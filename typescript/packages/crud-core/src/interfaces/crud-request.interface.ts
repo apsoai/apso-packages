@@ -40,6 +40,8 @@ export interface JoinCondition {
   select?: string[];
   alias?: string;
   on?: FilterCondition[];
+  /** PostgREST `rel!inner(...)`: parents with no matching embedded row are dropped. */
+  embedInner?: boolean;
 }
 
 export type FilterOperator =
@@ -102,9 +104,29 @@ export interface ParsedRequestParams {
    * on the root row. Only the PostgREST parser sets this (#57).
    */
   fieldAliases?: Record<string, string>;
+  /**
+   * PostgREST `Prefer: count=exact|planned|estimated`, set by the interceptor.
+   * The engine then counts the rows the same WHERE matches.
+   */
+  count?: 'exact' | 'planned' | 'estimated';
+}
+
+/**
+ * What a PostgREST list returned, written by the engine onto the request so
+ * the interceptor can send `Content-Range` (and 206 for a partial page).
+ */
+export interface ResultRange {
+  /** Zero-based position of the first returned row. */
+  offset: number;
+  /** Rows returned. */
+  rows: number;
+  /** Rows the filters match in total, when it was counted. */
+  total?: number;
 }
 
 export interface ParsedRequest {
+  /** PostgREST dialect only: set by the engine after a list query. */
+  range?: ResultRange;
   // Optional: nestjsx's CrudRequest is { parsed, options } only. The
   // interceptor still populates query, but consumers may construct a
   // request with just parsed + options.
@@ -170,6 +192,14 @@ export interface CrudRequestOptions {
     };
   };
   auth?: CrudAuthOptions;
+  /**
+   * Query dialects this controller accepts. Default: both (`['nestjsx',
+   * 'postgrest']`), or whatever `setAcceptedDialects` set for the app.
+   * With `['postgrest']` the dialect is not detected: every request is parsed
+   * as PostgREST, a nestjsx parameter (`filter`, `join`, `s`, ...) is a 400
+   * that names the PostgREST equivalent, and `X-Crud-Dialect: nestjsx` is a 400.
+   */
+  dialects?: Array<'nestjsx' | 'postgrest'>;
 }
 
 /**

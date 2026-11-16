@@ -178,6 +178,14 @@ export interface CrudControllerOptions {
   };
 
   /**
+   * Query dialects this controller accepts. Default: both, or whatever
+   * `setAcceptedDialects` set for the app. `['postgrest']` refuses nestjsx
+   * parameters and the `X-Crud-Dialect: nestjsx` header with a 400 and skips
+   * dialect detection. See @apso/crud docs/DIALECTS.md.
+   */
+  dialects?: Array<'nestjsx' | 'postgrest'>;
+
+  /**
    * Validation configuration. `false` disables validation entirely, matching
    * nestjsx/crud (autogen controllers commonly set `validation: false`).
    */

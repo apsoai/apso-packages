@@ -50,6 +50,12 @@
       ],
       "@apso/postgrest-request": [
         "../postgrest-request/src/index.ts"
+      ],
+      "@apso/mcp": [
+        "../mcp/src/index.ts"
+      ],
+      "@modelcontextprotocol/sdk/*": [
+        "node_modules/@modelcontextprotocol/sdk/dist/cjs/*"
       ]
     }
   },

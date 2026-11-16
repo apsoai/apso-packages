@@ -2,7 +2,7 @@
   "generatedBy": "crud-parity postgrest battery (#36/#52)",
   "dialectAvailable": true,
   "total": 43,
-  "failed": 6,
+  "failed": 0,
   "results": [
     {
       "id": "pg-eq",
@@ -77,8 +77,7 @@
     {
       "id": "pg-or",
       "mode": "conformance",
-      "ok": false,
-      "detail": "status 400 != 200; body is not a bare JSON array (PostgREST returns arrays, no envelope); ids [] != [1,3]"
+      "ok": true
     },
     {
       "id": "pg-implicit-and",
@@ -93,8 +92,7 @@
     {
       "id": "pg-select-rename",
       "mode": "conformance",
-      "ok": false,
-      "detail": "row keys [\"id\",\"title\"] != [\"id\",\"name\"]"
+      "ok": true
     },
     {
       "id": "pg-order-desc",
@@ -109,8 +107,7 @@
     {
       "id": "pg-limit-offset",
       "mode": "conformance",
-      "ok": false,
-      "detail": "body is not a bare JSON array (PostgREST returns arrays, no envelope)"
+      "ok": true
     },
     {
       "id": "pg-embed-m1",
@@ -135,8 +132,7 @@
     {
       "id": "pg-embed-filter-keeps-parents",
       "mode": "conformance",
-      "ok": false,
-      "detail": "ids [1,2,3,5] != [1,2,3,4,5,6]; p4 should keep empty embed array"
+      "ok": true
     },
     {
       "id": "pg-embed-inner",
@@ -146,8 +142,12 @@
     {
       "id": "pg-unknown-filter-column",
       "mode": "conformance",
-      "ok": false,
-      "detail": "status 500 != 400"
+      "ok": true
+    },
+    {
+      "id": "pg-non-allowlisted-embed",
+      "mode": "conformance",
+      "ok": true
     },
     {
       "id": "eqv-eq",
@@ -172,8 +172,7 @@
     {
       "id": "eqv-or",
       "mode": "equivalence",
-      "ok": false,
-      "detail": "pg 400 ids=[] vs nx 200 ids=[1,3]"
+      "ok": true
     },
     {
       "id": "eqv-sort",
@@ -217,11 +216,6 @@
     },
     {
       "id": "acc-scope-cannot-widen",
-      "mode": "access",
-      "ok": true
-    },
-    {
-      "id": "acc-non-allowlisted-embed",
       "mode": "access",
       "ok": true
     }

@@ -29,13 +29,19 @@ module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>/test'],
   testTimeout: 180000,
-  transform: { '^.+\\.ts$': ['ts-jest', { tsconfig: '<rootDir>/tsconfig.json' }] },
+  // The SDK is type-checked by its own tsconfig (it needs the DOM lib).
+  transform: { '^.+\\.ts$': ['ts-jest', { tsconfig: '<rootDir>/tsconfig.json', diagnostics: { exclude: ['**/packages/sdk/**'] } }] },
   moduleNameMapper: {
     '^@apso/crud$': `${PKGS}/crud/src/index.ts`,
     '^@apso/crud-core$': `${PKGS}/crud-core/src/index.ts`,
     '^@apso/crud-request$': `${PKGS}/crud-request/src/index.ts`,
     '^@apso/crud-typeorm$': `${PKGS}/crud-typeorm/src/index.ts`,
     '^@apso/postgrest-request$': `${PKGS}/postgrest-request/src/index.ts`,
+    // test/sdk.spec.ts skips until the SDK's entity()/get() speak PostgREST (its own PR).
+    '^@apso/sdk$': `${PKGS}/sdk/src/index.ts`,
+    // @apso/mcp joins the repo in its own PR; test/mcp.spec.ts skips until then.
+    '^@apso/mcp$': `${PKGS}/mcp/src/index.ts`,
+    '^@modelcontextprotocol/sdk/(.*)$': `${nm('@modelcontextprotocol/sdk')}/dist/cjs/$1`,
     '^typeorm$': nm('typeorm'),
     '^@nestjsx/crud$': nm('@nestjsx/crud'),
     '^@nestjsx/crud-request$': nm('@nestjsx/crud-request'),

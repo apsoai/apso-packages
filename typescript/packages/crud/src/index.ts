@@ -90,7 +90,7 @@ export {
 } from '@apso/postgrest-request';
 
 // Dialect detection used by the interceptor (#51).
-export { detectDialect } from './dialect';
+export { detectDialect, resolveDialect, setAcceptedDialects, ALL_DIALECTS } from './dialect';
 export type { Dialect } from './dialect';
 
 // Re-export TypeORM integration

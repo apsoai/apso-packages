@@ -18,6 +18,8 @@ export interface PostgrestError {
   details: string | null;
   hint: string | null;
   code: string | null;
+  /** The response's `x-request-id`, set on HTTP errors. */
+  requestId?: string;
 }
 
 export interface PostgrestResponse<T> {

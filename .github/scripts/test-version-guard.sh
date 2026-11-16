@@ -23,4 +23,16 @@ check 0.1.0 ""   ""      npm @apso/new 0.1.0 initial # never published
 check 0.2.0 "0.1.0" ""   pypi apso-domain-events 0.2.0 minor
 check 0.1.0 "0.1.0" ""   pypi apso-domain-events 0.1.0 patch # equal on PyPI: self-heal (skip-existing)
 check 0.1.0 ""   ""      go x 0.1.0 initial
+
+# pin-siblings: a release requires the sibling versions it was built with.
+T=$(mktemp -d)
+mkdir -p "$T/crud" "$T/crud-core" "$T/postgrest-request"
+echo '{"name":"@apso/crud-core","version":"1.2.0"}' >"$T/crud-core/package.json"
+echo '{"name":"@apso/postgrest-request","version":"1.1.4"}' >"$T/postgrest-request/package.json"
+echo '{"name":"@apso/crud","version":"1.0.3","dependencies":{"@apso/crud-core":"^1.0.0","@apso/postgrest-request":"^1.0.0","@apso/elsewhere":"^1.0.0","rxjs":"^7.8.1"}}' >"$T/crud/package.json"
+bash "$S" pin-siblings "$T/crud"
+got=$(node -p 'JSON.stringify(require(process.argv[1]).dependencies)' "$T/crud/package.json")
+exp='{"@apso/crud-core":"^1.2.0","@apso/postgrest-request":"^1.1.4","@apso/elsewhere":"^1.0.0","rxjs":"^7.8.1"}'
+if [ "$got" = "$exp" ]; then echo "ok   pin-siblings"; else echo "FAIL pin-siblings got $got"; fail=1; fi
+rm -rf "$T"
 exit $fail
