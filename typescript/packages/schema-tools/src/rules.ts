@@ -584,9 +584,16 @@ export const rules: Rule[] = [
     for (const entity of entitiesOf(schema)) {
       // A unique constraint is backed by an index, so one that starts with the key covers it.
       const indexedFirst = new Set([...listOf(entity.indexes), ...listOf(entity.uniques)].map((i) => i?.fields?.[0]));
-      const keys = [...(props.get(entity.name)?.values() || [])].filter(
-        (p) => p.foreignKey && !p.side.rel.index && !indexedFirst.has(p.name)
-      );
+      // An index may name the key by its property (patientId), its
+      // relationship (patient) or its own column name (patient_id).
+      const keys = [...(props.get(entity.name)?.values() || [])]
+        .filter(
+          (p) =>
+            p.foreignKey &&
+            !p.side.rel.index &&
+            ![p.name, p.name.replace(/Id$/, ""), p.side.rel.joinColumnName].some((n) => n !== undefined && indexedFirst.has(n))
+        )
+        .map((p) => ({ ...p, name: p.side.rel.joinColumnName || p.name }));
       if (keys.length === 0) continue;
       report(
         `Foreign key${keys.length > 1 ? "s" : ""} ${keys.map((k) => `"${k.name}"`).join(", ")} on entity "${entity.name}" ${keys.length > 1 ? "have" : "has"} no index, so loading related ${entity.name} rows scans the table. Set "index": true on ${keys.map((k) => describeRelationship(k.side.rel)).join("; ")}.`,

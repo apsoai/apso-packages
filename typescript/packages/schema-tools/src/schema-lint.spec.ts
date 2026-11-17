@@ -380,6 +380,17 @@ describe("index and unique coverage", () => {
     expect(issue(scoped([{ fields: ["organizationId", "email"] }]), "FOREIGN_KEY_NOT_INDEXED")).toBeUndefined();
   });
 
+  test("an index led by the relationship name or the joinColumnName indexes the foreign key", () => {
+    const schema = (index: string, joinColumnName?: string): Schema => ({
+      entities: [{ ...entity("Visit"), indexes: [{ fields: [index, "label"] }] }, entity("Patient")],
+      relationships: [{ from: "Visit", to: "Patient", type: "ManyToOne", joinColumnName }],
+    });
+    expect(issue(schema("patient"), "FOREIGN_KEY_NOT_INDEXED")).toBeUndefined();
+    expect(issue(schema("patient_id", "patient_id"), "FOREIGN_KEY_NOT_INDEXED")).toBeUndefined();
+    // Not indexed: the warning names the column the database has.
+    expect(issue(schema("label", "patient_id"), "FOREIGN_KEY_NOT_INDEXED")?.message).toContain('"patient_id"');
+  });
+
   test("email unique per tenant is enough, and the fix names the schema's own spelling", () => {
     expect(issue(scoped([{ fields: ["organizationId", "email"] }]), "EMAIL_NOT_UNIQUE")).toBeUndefined();
     expect(issue(scoped(), "EMAIL_NOT_UNIQUE")?.message).toContain('"unique": true');
