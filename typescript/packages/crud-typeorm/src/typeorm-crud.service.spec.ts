@@ -169,6 +169,49 @@ describe('TypeOrmCrudService', () => {
       expect(calls[0][0]?.constructor?.name).toBe('Brackets');
     });
 
+    it('applies paramsFilter next to a search tree: the route id always holds', async () => {
+      const parsedRequest: ParsedRequest = {
+        query: {},
+        options: {},
+        parsed: {
+          fields: [],
+          paramsFilter: [{ field: 'id', operator: '$eq', value: 42 }],
+          // A tree from a parser that left the route id out.
+          search: { id: { $eq: 7 } },
+          filter: [],
+          or: [],
+          join: [],
+          sort: [],
+          limit: 20,
+          offset: 0,
+          page: 1,
+          cache: 0
+        }
+      };
+
+      (mockQueryBuilder.getManyAndCount as jest.Mock).mockResolvedValue([[], 0]);
+
+      await service.getMany(parsedRequest);
+
+      const calls = (mockQueryBuilder.andWhere as jest.Mock).mock.calls;
+      expect(calls[0][0]?.constructor?.name).toBe('Brackets');
+      expect(calls[1]).toEqual(['entity.id = :p0', { p0: 42 }]);
+    });
+
+    it('400s a filter, search or sort name that is not a plain column name', () => {
+      const resolve = (field: string, aliases?: Map<string, string>) => (service as any).resolveField(field, aliases);
+      const joined = new Map([['author', 'author'], ['author.profile', 'profile']]);
+      expect(resolve('views')).toBe('entity.views');
+      expect(resolve('entity.views')).toBe('entity.views');
+      expect(resolve('author.name', joined)).toBe('author.name');
+      expect(resolve('author.profile.bio', joined)).toBe('profile.bio');
+      expect(resolve('profile.bio', joined)).toBe('profile.bio');
+      for (const name of ['no such column', 'views)', 'views = views', 'other.views', 'author.name', '']) {
+        expect(() => resolve(name)).toThrow(`Unknown column '${name}' in query`);
+      }
+      expect(() => resolve('author.no such column', joined)).toThrow('Unknown column');
+    });
+
     it('applies paramsFilter when search is empty (id targeting)', async () => {
       const parsedRequest: ParsedRequest = {
         query: {},

@@ -28,6 +28,9 @@ import {
   QueryOptions
 } from '@apso/crud-core';
 
+/** A name the request may put into SQL text: a plain identifier. */
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 @Injectable()
 export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<T> {
   protected repository: Repository<T>;
@@ -493,7 +496,7 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     // nestjsx silently drops unknown field names (clients build field lists
     // dynamically; a stale name must not 500 the endpoint — #42).
     const known = this.rootColumnNames();
-    const requested = (parsed.fields || []).filter(f => !known || known.has(f));
+    const requested = (parsed.fields || []).filter(f => IDENTIFIER.test(f) && (!known || known.has(f)));
     // nestjsx always includes the primary key(s), PK first; dedup fixes
     // nestjsx issue #777.
     const uniqueFields = [...new Set([...this.rootPrimaryKeys(), ...requested])];
@@ -508,8 +511,9 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
    * nestjsx/crud. WHERE is built solely from that tree, so an auth filter
    * ANDed at the top can never be widened by user-supplied conditions.
    *
-   * Fallback: a hand-constructed ParsedRequest with an empty search still
-   * gets paramsFilter applied, so getOne/update/delete always target by id.
+   * paramsFilter is applied as well, in every case, so getOne/update/delete
+   * always target the row the route names even when a parser left it out of
+   * the tree.
    */
   protected applyWhere(
     queryBuilder: SelectQueryBuilder<T>,
@@ -521,9 +525,10 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
 
     if (search && Object.keys(search).length > 0) {
       queryBuilder.andWhere(new Brackets(qb => this.buildSearch(qb, search, '$and', counter, aliases)));
-      return;
     }
 
+    // The route's own parameters (/:id) are always ANDed on, whatever the
+    // search tree holds: a request for one row acts on that row or on none.
     if (paramsFilter && paramsFilter.length > 0) {
       paramsFilter.forEach(condition => {
         const { clause, params } = this.buildCondition(condition.field, condition.operator, condition.value, counter, aliases);
@@ -621,7 +626,7 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     const usedAliases = new Set<string>(['entity']);
     const postgrest = req.parsed.dialect === 'postgrest';
 
-    for (const join of ordered) {
+    for (let join of ordered) {
       const path = join.field;
       const cfg = allowed ? allowed[path] : undefined;
       // nestjsx only applies joins configured in options.query.join; with no
@@ -644,7 +649,7 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
       if (!parentAlias) continue; // parent not joined: skip, like nestjsx
 
       // Alias: options alias, else last segment, de-collided with full path
-      let alias = (cfg && (cfg as any).alias) || join.alias || relationName;
+      let alias = (cfg && (cfg as any).alias) || (join.alias && IDENTIFIER.test(join.alias) ? join.alias : undefined) || relationName;
       if (usedAliases.has(alias)) {
         alias = segments.join('_');
       }
@@ -654,10 +659,14 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
       const relation = `${parentAlias}.${relationName}`;
       // `rel!inner(...)` drops parents that have no (matching) embedded row.
       const required = Boolean((cfg && (cfg as any).required) || join.embedInner);
-      if (postgrest && join.select) {
+      if (join.select) {
         const known = this.columnNamesOf(path);
-        const unknown = known && join.select.find(f => !known.has(f));
-        if (unknown) throw new BadRequestException(`Unknown column '${unknown}' in embed '${path}'`);
+        const isColumn = (f: string) => IDENTIFIER.test(f) && (!known || known.has(f));
+        const unknown = join.select.find(f => !isColumn(f));
+        // PostgREST answers an unknown embed column with a 400; nestjsx drops
+        // unknown field names, as it does for the root entity (#42).
+        if (unknown && postgrest) throw new BadRequestException(`Unknown column '${unknown}' in embed '${path}'`);
+        if (unknown) join = { ...join, select: join.select.filter(isColumn) };
       }
 
       // Effective select: requested ∩ allowed (when configured), + PK
@@ -684,8 +693,8 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
         join.on.forEach(condition => {
           const col = condition.field.includes('.')
             ? condition.field
-            : `${alias}.${condition.field}`;
-          const { clause, params } = this.buildCondition(col, condition.operator, condition.value, counter);
+            : `${path}.${condition.field}`;
+          const { clause, params } = this.buildCondition(col, condition.operator, condition.value, counter, aliases);
           clauses.push(clause);
           Object.assign(merged, params);
         });
@@ -797,20 +806,69 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
    * Resolve a search/sort field to a SQL identifier.
    * - plain 'col' -> entity.col
    * - 'a.b.col' where 'a.b' is a joined path -> '<aliasOf(a.b)>.col'
-   * - '<alias>.col' where alias was already resolved -> unchanged
+   * - '<alias>.col' where alias is 'entity' or a joined path's alias -> unchanged
+   *
+   * The name comes from the request (a filter, a search tree key, a sort) and
+   * ends up in the SQL text, so it must be a column of the entity it points
+   * at. Anything else is a 400.
    */
   protected resolveField(field: string, aliases?: Map<string, string>): string {
-    if (!field.includes('.')) {
-      return `entity.${field}`;
-    }
+    const unknown = () => new BadRequestException(`Unknown column '${field}' in query`);
+    if (typeof field !== 'string') throw unknown();
     const idx = field.lastIndexOf('.');
-    const prefix = field.slice(0, idx);
+    const prefix = idx === -1 ? 'entity' : field.slice(0, idx);
     const col = field.slice(idx + 1);
-    if (aliases?.has(prefix)) {
-      return `${aliases.get(prefix)}.${col}`;
+
+    // Which entity the prefix points at: '' is the root, otherwise a join path.
+    let path: string;
+    let alias: string;
+    if (prefix === 'entity') {
+      path = '';
+      alias = 'entity';
+    } else if (aliases?.has(prefix)) {
+      path = prefix;
+      alias = aliases.get(prefix)!;
+    } else {
+      const joined = [...(aliases ?? [])].find(([, value]) => value === prefix);
+      // A dotted column of the root entity itself (an embedded column).
+      if (!joined) {
+        if (this.queryNamesOf('')?.has(field)) return `entity.${field}`;
+        throw unknown();
+      }
+      path = joined[0];
+      alias = prefix;
     }
-    // Already alias-qualified (entity.x, or a registered alias value)
-    return field;
+
+    const known = this.queryNamesOf(path);
+    if (!IDENTIFIER.test(col) || (known && !known.has(col))) throw unknown();
+    return `${alias}.${col}`;
+  }
+
+  /**
+   * The names a query may use for the entity at a join path ('' is the
+   * root): each column by property name, property path and database name,
+   * and each relation that owns a join column. Null without metadata (mock
+   * repositories in unit tests), where only the identifier shape is checked.
+   */
+  protected queryNamesOf(joinPath: string): Set<string> | null {
+    try {
+      let meta = this.repository.metadata;
+      for (const segment of joinPath ? joinPath.split('.') : []) {
+        const rel = meta.relations.find(r => r.propertyName === segment);
+        if (!rel) return null;
+        meta = rel.inverseEntityMetadata;
+      }
+      const names = new Set<string>();
+      for (const c of meta.columns) {
+        names.add(c.propertyName).add(c.propertyPath).add(c.databaseName);
+      }
+      for (const r of meta.relations) {
+        if (r.joinColumns.length > 0) names.add(r.propertyPath);
+      }
+      return names;
+    } catch {
+      return null;
+    }
   }
 
   /**
