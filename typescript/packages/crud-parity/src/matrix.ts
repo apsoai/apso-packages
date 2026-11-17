@@ -175,11 +175,11 @@ export const MATRIX: ParityCase[] = [
   { id: 'jsel-join-with-pk-only', category: 'join-select', path: '/posts?join=author||id&sort=id,ASC' },
 
   // --- error-path parity ---
-  { id: 'err-unknown-filter-field', category: 'errors', path: '/posts?filter=nonexistent||$eq||x&sort=id,ASC' },
+  // An unknown filter or sort column is a 400 in @apso/crud and a 500 in nestjsx: an
+  // intended difference, checked in test/query-names.spec.ts instead of here.
   { id: 'err-invalid-operator', category: 'errors', path: '/posts?filter=views||$bogus||1&sort=id,ASC' },
   { id: 'err-malformed-filter', category: 'errors', path: '/posts?filter=views&sort=id,ASC' },
   { id: 'err-invalid-sort-dir', category: 'errors', path: '/posts?sort=views,SIDEWAYS' },
-  { id: 'err-unknown-sort-field', category: 'errors', path: '/posts?sort=nonexistent,ASC' },
   { id: 'err-non-allowlisted-join', category: 'errors', path: '/posts?join=reviews&sort=id,ASC' },
   { id: 'err-unknown-join', category: 'errors', path: '/posts?join=blorp&sort=id,ASC' },
   { id: 'err-bad-search-json', category: 'errors', path: '/posts?s=notjson&sort=id,ASC' },
