@@ -101,6 +101,28 @@ export function oneToOneColumns(schema: Schema): Map<string, Set<string>> {
 }
 
 /**
+ * Foreign key columns a relationship names itself ("joinColumnName"), per
+ * entity that holds the column, mirroring parseRelationship in @apso/cli:
+ * the `from` side of a ManyToOne, the `to` side of a OneToMany, and the
+ * owning side of a OneToOne. "indexes" and "uniques" may use these names.
+ */
+export function joinColumnNames(schema: Schema): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const rel of Array.isArray(schema.relationships) ? schema.relationships : []) {
+    if (typeof rel?.joinColumnName !== "string" || typeof rel.from !== "string" || typeof rel.to !== "string") continue;
+    const holder =
+      rel.type === "ManyToOne" ? rel.from
+      : rel.type === "OneToMany" ? rel.to
+      : rel.type === "OneToOne" ? (rel.bi_directional && rel.to_name ? rel.to : rel.from)
+      : undefined;
+    if (!holder) continue;
+    if (!out.has(holder)) out.set(holder, new Set());
+    out.get(holder)!.add(rel.joinColumnName);
+  }
+  return out;
+}
+
+/**
  * Properties the CLI generates per entity, deduped the way
  * getRelationshipForTemplate does (by other entity + reference name), plus any
  * property that two different relationships both generate on one entity.

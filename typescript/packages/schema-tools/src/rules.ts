@@ -3,6 +3,7 @@ import {
   RELATIONSHIP_TYPES,
   camelCase,
   describeRelationship,
+  joinColumnNames,
   oneToOneColumns,
   pascalCase,
   relationshipProperties,
@@ -371,12 +372,14 @@ export const rules: Rule[] = [
   rule("INDEX_UNKNOWN_FIELD", "error", (schema, report) => {
     const { props } = relationshipProperties(schema);
     const oneToOne = oneToOneColumns(schema);
+    const joinColumns = joinColumnNames(schema);
     for (const entity of entitiesOf(schema)) {
       const known = new Set([
         "id", "created_at", "updated_at",
         ...fieldsOf(entity).map((f) => f.name),
         ...(props.get(entity.name)?.keys() || []),
         ...(oneToOne.get(entity.name) || []),
+        ...(joinColumns.get(entity.name) || []),
       ]);
       for (const kind of ["indexes", "uniques"] as const) {
         const list = entity[kind];
@@ -385,15 +388,29 @@ export const rules: Rule[] = [
           const fields = Array.isArray(constraint?.fields) ? constraint.fields : [];
           const missing = fields.filter((n) => !known.has(n));
           if (fields.length > 0 && missing.length === 0) continue;
+          if (fields.length === 0) {
+            report(
+              `Entity "${entity.name}" has an entry in "${kind}" without a "fields" list. Write it as { "fields": ["fieldName"] } or remove it.`,
+              { entity: entity.name },
+              () => (entity[kind] = (entity[kind] as unknown[]).filter((c) => c !== constraint) as never)
+            );
+            continue;
+          }
+          // A fix never removes a column: unique(organization_id, patient_id)
+          // without patient_id allows one row per organization (cli#244). It
+          // only rewrites a name that is the entity's own in another casing,
+          // such as the column "patient_id" for the foreign key "patientId".
+          const sameName = (n: string) => [...known].filter((k) => camelCase(k) === camelCase(n));
+          const renamed = fields.map((n) => (known.has(n) || sameName(n).length !== 1 ? n : sameName(n)[0]));
+          const fixable = renamed.every((n) => known.has(n)) && new Set(renamed).size === renamed.length;
           report(
-            fields.length === 0
-              ? `Entity "${entity.name}" has an entry in "${kind}" without a "fields" list. Write it as { "fields": ["fieldName"] } or remove it.`
-              : `Entity "${entity.name}" has an entry in "${kind}" on ${missing.map((n) => `"${n}"`).join(", ")}, which is not a field of "${entity.name}". Point it at an existing field or remove it.`,
+            `Entity "${entity.name}" has an entry in "${kind}" on ${missing.map((n) => `"${n}"`).join(", ")}, which is not a field of "${entity.name}". ${
+              fixable
+                ? `Write it as ${renamed.map((n) => `"${n}"`).join(", ")}.`
+                : "Point it at an existing field or a relationship's name, or remove the entry."
+            }`,
             { entity: entity.name, field: missing[0] },
-            () => {
-              constraint.fields = fields.filter((n) => known.has(n));
-              if (constraint.fields.length === 0) entity[kind] = (entity[kind] as unknown[]).filter((c) => c !== constraint) as never;
-            }
+            fixable ? () => (constraint.fields = renamed) : undefined
           );
         }
       }

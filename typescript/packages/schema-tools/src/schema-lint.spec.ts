@@ -137,21 +137,65 @@ describe("error rules", () => {
     expect(schema.relationships![1].to_name).toBe("ownerTeam");
   });
 
-  test("INDEX_UNKNOWN_FIELD allows generated columns and drops unknown ones", () => {
+  test("INDEX_UNKNOWN_FIELD allows generated columns and never drops an unknown one", () => {
     const schema: Schema = {
       entities: [
-        { ...entity("Note"), indexes: [{ fields: ["contactId", "created_at"] }, { fields: ["ghost"] }], uniques: [{ fields: ["label", "nope"] }] },
+        { ...entity("Note"), indexes: [{ fields: ["contactId", "created_at"] }, { fields: ["ghost"] }, {} as never], uniques: [{ fields: ["label", "nope"] }] },
         entity("Contact"),
       ],
       relationships: [{ from: "Note", to: "Contact", type: "ManyToOne" }],
     };
-    expect(errors(schema).map((i) => [i.rule, i.field])).toEqual([
-      ["INDEX_UNKNOWN_FIELD", "ghost"],
-      ["INDEX_UNKNOWN_FIELD", "nope"],
+    expect(errors(schema).map((i) => [i.rule, i.field, i.fixable])).toEqual([
+      ["INDEX_UNKNOWN_FIELD", "ghost", false],
+      ["INDEX_UNKNOWN_FIELD", undefined, true],
+      ["INDEX_UNKNOWN_FIELD", "nope", false],
     ]);
+    // Only the entry with no fields at all is removed; the others keep every column.
     const fixed = fixSchema(schema).schema.entities[0];
-    expect(fixed.indexes).toEqual([{ fields: ["contactId", "created_at"] }]);
-    expect(fixed.uniques).toEqual([{ fields: ["label"] }]);
+    expect(fixed.indexes).toEqual([{ fields: ["contactId", "created_at"] }, { fields: ["ghost"] }]);
+    expect(fixed.uniques).toEqual([{ fields: ["label", "nope"] }]);
+  });
+
+  // apsoai/cli#244: the fix once turned unique(organization_id, patient_id)
+  // into unique(organization_id), one enrollment per organization.
+  test("INDEX_UNKNOWN_FIELD fix rewrites a foreign key column to its property and keeps every column", () => {
+    const schema: Schema = {
+      entities: [
+        {
+          ...entity("Enrollment"),
+          fields: [{ name: "performance_year", type: "integer" }],
+          uniques: [{ fields: ["organization_id", "patient_id"] }, { fields: ["patient_id", "performanceYear"] }],
+          indexes: [{ fields: ["organization_id", "ghost"] }],
+        },
+        entity("Organization"),
+        entity("Patient"),
+      ],
+      relationships: [
+        { from: "Enrollment", to: "Organization", type: "ManyToOne" },
+        { from: "Enrollment", to: "Patient", type: "ManyToOne" },
+      ],
+    };
+    const fixed = fixSchema(schema).schema.entities[0];
+    expect(fixed.uniques).toEqual([{ fields: ["organizationId", "patientId"] }, { fields: ["patientId", "performance_year"] }]);
+    // One name cannot be resolved, so the whole entry is left for the author.
+    expect(fixed.indexes).toEqual([{ fields: ["organization_id", "ghost"] }]);
+    expect(errors(fixSchema(schema).schema).map((i) => [i.rule, i.field, i.fixable])).toEqual([["INDEX_UNKNOWN_FIELD", "organization_id", false]]);
+  });
+
+  test("INDEX_UNKNOWN_FIELD knows a foreign key's joinColumnName", () => {
+    const schema: Schema = {
+      entities: [
+        { ...entity("Enrollment"), uniques: [{ fields: ["patient_id", "label"] }] },
+        { ...entity("Patient"), indexes: [{ fields: ["patient_id"] }] },
+        { ...entity("Profile"), indexes: [{ fields: ["patient_fk"] }] },
+      ],
+      relationships: [
+        { from: "Enrollment", to: "Patient", type: "ManyToOne", joinColumnName: "patient_id" },
+        { from: "Profile", to: "Patient", type: "OneToOne", joinColumnName: "patient_fk" },
+      ],
+    };
+    // Only the side that holds the column knows the name.
+    expect(errors(schema).map((i) => [i.entity, i.field])).toEqual([["Patient", "patient_id"]]);
   });
 
   test("INDEX_UNKNOWN_FIELD knows the FK column of a OneToOne the entity owns", () => {
