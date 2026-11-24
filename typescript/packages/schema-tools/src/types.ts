@@ -52,6 +52,8 @@ export interface SchemaRelationship {
   index?: boolean;
   cascadeDelete?: boolean;
   joinTableName?: string;
+  /** On a foreign key: the column's own name, e.g. "patient_id". */
+  joinColumnName?: string;
 }
 
 export interface Schema {
