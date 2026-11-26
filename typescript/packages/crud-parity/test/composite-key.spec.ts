@@ -134,6 +134,14 @@ class DocController {
   constructor(public service: DocService) {}
 }
 
+/** Scoped without persist, as through a parent row: CrudAuth insertOnly. */
+@Crud({ model: { type: Doc }, params: { id: { field: 'slug', type: 'string', primary: true } } })
+@CrudAuth({ filter: tenant, insertOnly: () => true })
+@Controller('docs-by-parent')
+class DocByParentController {
+  constructor(public service: DocService) {}
+}
+
 @Injectable()
 class NoteService extends TypeOrmCrudService<Note> {
   constructor(@InjectRepository(Note) repo: Repository<Note>) {
@@ -204,7 +212,7 @@ beforeAll(async () => {
       TypeOrmModule.forRootAsync({ useFactory: () => ({}) as any, dataSourceFactory: async () => ds }),
       TypeOrmModule.forFeature(ENTITIES),
     ],
-    controllers: [RateLimitController, PageController, DocController, NoteController, TaggingController, DraftController],
+    controllers: [RateLimitController, PageController, DocController, DocByParentController, NoteController, TaggingController, DraftController],
     providers: [RateLimitService, PageService, DocService, NoteService, TaggingService, DraftService],
   })
   class AppModule {}
@@ -299,6 +307,12 @@ describe('a create that names its own key, under auth persist', () => {
     expect((await http().post('/docs').set(as(1)).send({ slug: 'plan', title: 'mine' })).status).toBe(201);
 
     const taken = await http().post('/docs').set(as(2)).send({ slug: 'plan', title: 'theirs' });
+    expect(taken.status).toBe(409);
+    expect(await ds.getRepository(Doc).findOneBy({ slug: 'plan' })).toEqual({ slug: 'plan', workspaceId: 1, title: 'mine' });
+  });
+
+  it('with insertOnly and no persist, a create still cannot write over the row that has the key', async () => {
+    const taken = await http().post('/docs-by-parent').set(as(2)).send({ slug: 'plan', workspaceId: 2, title: 'theirs' });
     expect(taken.status).toBe(409);
     expect(await ds.getRepository(Doc).findOneBy({ slug: 'plan' })).toEqual({ slug: 'plan', workspaceId: 1, title: 'mine' });
   });

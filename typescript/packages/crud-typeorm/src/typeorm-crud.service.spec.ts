@@ -749,6 +749,16 @@ describe('TypeOrmCrudService', () => {
         });
       });
 
+      it('is insert-only too when CrudAuth insertOnly marks the caller and persist pins nothing', async () => {
+        const { manager } = keyed({ slug: 'plan' });
+        const req = pinned();
+        req.parsed.authPersist = {};
+        req.parsed.authInsertOnly = true;
+        const err: any = await service.createOne(req, { slug: 'plan', name: 'A' } as any).catch((e) => e);
+        expect(err.getStatus()).toBe(409);
+        expect(manager.save).not.toHaveBeenCalled();
+      });
+
       it('saves without the lookup when the body leaves the key out', async () => {
         const { transaction } = keyed(null);
         await service.createOne(pinned(), { name: 'A' } as any);

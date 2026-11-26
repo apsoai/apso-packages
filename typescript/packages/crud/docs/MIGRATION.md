@@ -118,6 +118,20 @@ export class RateLimitController {}
 `field` is the entity property. Every segment is part of the WHERE clause, so
 a request acts on the row the whole key names or answers 404.
 
+### `@CrudAuth` insertOnly
+
+`insertOnly: (req) => boolean` marks a caller whose create may only add rows,
+for an entity scoped some way `persist` does not express, such as through a
+parent row. It has the same effect as a `persist` that pins a field: a create
+that names an existing key answers 409 and leaves the row as it was.
+
+### A `timestamp` key on a server not on UTC
+
+A `timestamp` column with no time zone is written in the server's zone. A key
+or filter value sent as an instant with a zone, which is how a response
+returns the column (`2026-01-01T00:00:00.000Z`), is read the same way, so the
+value the API returned finds its row whatever zone the server runs in.
+
 ### A key the caller sends, under `@CrudAuth` persist
 
 When `persist` pins a field, a create drops a primary key the database

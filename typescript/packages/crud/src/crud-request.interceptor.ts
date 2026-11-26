@@ -92,6 +92,9 @@ export class CrudRequestInterceptor implements NestInterceptor {
       }
       const query = pgRead ? withRangeHeader(request.query, request.headers?.range) : request.query;
       parsedRequest = parser.parse(query, request.params, authContext);
+      if (auth && typeof auth.insertOnly === 'function' && auth.insertOnly(auth.property ? request[auth.property] : request)) {
+        parsedRequest.parsed.authInsertOnly = true;
+      }
       if (pgRead) {
         const count = /(?:^|[,;\s])count=(exact|planned|estimated)\b/i.exec(String(request.headers?.prefer ?? ''));
         if (count) parsedRequest.parsed.count = count[1].toLowerCase() as 'exact' | 'planned' | 'estimated';

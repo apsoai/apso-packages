@@ -328,8 +328,12 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     }
   }
 
-  /** True when auth.persist pins at least one field of this request's writes. */
+  /**
+   * True when this request's create may only add rows: auth.persist pins at
+   * least one field, or CrudAuth insertOnly said so for the caller.
+   */
   protected pins(req: ParsedRequest): boolean {
+    if (req.parsed.authInsertOnly) return true;
     const persist = req.parsed.authPersist;
     return Boolean(persist) && typeof persist === 'object' && Object.keys(persist).length > 0;
   }
@@ -347,7 +351,7 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
       if (typeof value === 'object' && !(value instanceof Date)) {
         throw new BadRequestException(`'${pk}' must be a single value`);
       }
-      key[pk] = value;
+      key[pk] = this.asColumnValue(pk, value);
     }
     return key;
   }
@@ -537,6 +541,28 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
       const t = this.entity as any;
       return (t && t.name) || 'Entity';
     }
+  }
+
+  /**
+   * A value for a `timestamp` column (no time zone) as the driver writes one.
+   * An instant sent as text with a zone ("2026-01-01T00:00:00.000Z", which is
+   * how a response returns the column) becomes a Date: Postgres would drop the
+   * zone from the text, while the driver writes a Date in the server's zone,
+   * the same way it wrote the row. Without this a host not on UTC cannot find a
+   * row by the value the API returned for it.
+   */
+  protected asColumnValue(field: string, value: any): any {
+    if (field.includes('.')) return value;
+    let type: unknown;
+    try {
+      type = this.repository.metadata.findColumnWithPropertyName(field)?.type;
+    } catch {
+      return value;
+    }
+    if (type !== 'timestamp' && type !== 'timestamp without time zone' && type !== 'datetime') return value;
+    const instant = (v: any) =>
+      typeof v === 'string' && /T\d{2}:\d{2}.*(Z|[+-]\d{2}:?\d{2})$/i.test(v) && !Number.isNaN(Date.parse(v)) ? new Date(v) : v;
+    return Array.isArray(value) ? value.map(instant) : instant(value);
   }
 
   /**
@@ -999,6 +1025,7 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     aliases?: Map<string, string>
   ): { clause: string; params: Record<string, any> } {
     const col = this.resolveField(field, aliases);
+    value = this.asColumnValue(field, value);
     const key = `p${counter.n++}`;
     const p = `:${key}`;
 
