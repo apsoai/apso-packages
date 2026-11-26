@@ -670,6 +670,15 @@ describe('TypeOrmCrudService', () => {
         expect(manager.save).not.toHaveBeenCalled();
       });
 
+      it('answers 409 when another request inserts the key after the lookup', async () => {
+        const { transaction } = keyed(null);
+        transaction.mockImplementationOnce(async () => {
+          throw Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' });
+        });
+        const err: any = await service.createOne(pinned(), { slug: 'plan', name: 'A' } as any).catch((e) => e);
+        expect(err.getStatus()).toBe(409);
+      });
+
       it('answers 409 for a bulk create that repeats a key, before any query', async () => {
         const { transaction } = keyed(null);
         const bulk = [{ slug: 'x', name: 'A' }, { slug: 'x', name: 'B' }];

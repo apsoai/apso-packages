@@ -317,9 +317,15 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
       return manager.save(this.repository.target, entities);
     };
     const manager = this.repository.manager;
-    return /postgres/.test(String(manager.connection.options.type))
-      ? manager.transaction('REPEATABLE READ', work)
-      : manager.transaction(work);
+    try {
+      return await (/postgres/.test(String(manager.connection.options.type))
+        ? manager.transaction('REPEATABLE READ', work)
+        : manager.transaction(work));
+    } catch (e: any) {
+      // Another request created the key between the lookup and the INSERT.
+      if ((e?.code ?? e?.driverError?.code) === '23505') throw taken();
+      throw e;
+    }
   }
 
   /** True when auth.persist pins at least one field of this request's writes. */
