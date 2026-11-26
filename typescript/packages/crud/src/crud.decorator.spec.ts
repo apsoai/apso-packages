@@ -4,7 +4,7 @@
 
 import { Controller, Get, Post, Patch, Put, Delete } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
-import { Crud } from './crud.decorator';
+import { Crud, oneRowRoute } from './crud.decorator';
 import { CrudControllerOptions } from '@apso/crud-core';
 
 // Mock entity for testing
@@ -95,6 +95,57 @@ describe('Crud Decorator', () => {
     expect(instance.createOne).toBeDefined();
     expect(instance.updateOne).toBeDefined();
     expect(instance.deleteOne).toBeDefined();
+  });
+
+  describe('One-row route path', () => {
+    const paths = (controller: any) =>
+      Object.fromEntries(
+        ['getOneBase', 'updateOneBase', 'replaceOneBase', 'deleteOneBase', 'recoverOneBase'].map(name => [
+          name,
+          Reflect.getMetadata('path', controller.prototype[name]),
+        ]),
+      );
+
+    it('is /:id when no param is marked primary, or only id is', () => {
+      @Crud({ model: { type: TestEntity } })
+      class Plain {}
+      @Crud({ model: { type: TestEntity }, params: { id: { field: 'slug', type: 'string', primary: true } } })
+      class Renamed {}
+
+      for (const controller of [Plain, Renamed]) {
+        expect(paths(controller)).toEqual({
+          getOneBase: ':id',
+          updateOneBase: ':id',
+          replaceOneBase: ':id',
+          deleteOneBase: ':id',
+          recoverOneBase: ':id/recover',
+        });
+      }
+    });
+
+    it('has one segment per primary param, in the order they are declared', () => {
+      const params = {
+        bucket: { field: 'bucket', type: 'string' as const, primary: true },
+        // Not primary: a filter on a parent path segment, never part of the route.
+        workspaceId: { field: 'workspaceId', type: 'number' as const },
+        windowStart: { field: 'windowStart', type: 'string' as const, primary: true },
+      };
+      @Crud({ model: { type: TestEntity }, params })
+      class Composite {}
+
+      expect(paths(Composite)).toEqual({
+        getOneBase: ':bucket/:windowStart',
+        updateOneBase: ':bucket/:windowStart',
+        replaceOneBase: ':bucket/:windowStart',
+        deleteOneBase: ':bucket/:windowStart',
+        recoverOneBase: ':bucket/:windowStart/recover',
+      });
+      expect(oneRowRoute({ model: { type: TestEntity }, params })).toEqual({
+        path: ':bucket/:windowStart',
+        params: ['bucket', 'windowStart'],
+        fields: { bucket: 'bucket', windowStart: 'windowStart' },
+      });
+    });
   });
 
   describe('Route Exclusion', () => {

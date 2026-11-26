@@ -80,6 +80,8 @@ export interface ParsedRequestParams {
   fields: string[];
   paramsFilter: FilterCondition[];
   authPersist?: any;
+  /** Set by CrudAuth insertOnly: a create may only add rows. */
+  authInsertOnly?: boolean;
   classTransformOptions?: any;
   search: SearchCondition;
   filter: FilterCondition[];
@@ -149,6 +151,10 @@ export type SCondition = SearchCondition;
  * final search tree, so user-supplied filter/or/s params can never widen it.
  * `or` (when present) is ORed against the rest of the search tree instead.
  * `persist` returns fields force-set on create/update/replace DTOs.
+ * `insertOnly` (Apso) returns true for a caller whose create may only add a
+ * row: a key the body names that exists answers 409 instead of being
+ * updated. A non-empty `persist` already implies it; this covers a caller
+ * scoped some other way, such as through a parent row.
  * `property` selects what is passed to the callbacks (e.g. 'user' passes
  * req.user); when omitted the whole request object is passed.
  */
@@ -157,6 +163,7 @@ export interface CrudAuthOptions {
   filter?: (userOrRequest: any) => SearchCondition | void;
   or?: (userOrRequest: any) => SearchCondition | void;
   persist?: (userOrRequest: any) => Record<string, any> | void;
+  insertOnly?: (userOrRequest: any) => boolean;
 }
 
 export interface CrudRequestOptions {

@@ -96,6 +96,55 @@ export class PostController implements CrudController<Post> {
 }
 ```
 
+### A key of more than one column
+
+The routes that address one row take their path from the `params` entries
+marked `primary`, one segment each, in the order they are declared. One
+primary param named `id` (or none) is `/:id`. Two give `/:bucket/:windowStart`:
+
+```typescript
+@Crud({
+  model: { type: RateLimit },
+  params: {
+    bucket: { field: 'bucket', type: 'string', primary: true },
+    windowStart: { field: 'windowStart', type: 'string', primary: true },
+  },
+})
+@Controller('rate-limits')
+export class RateLimitController {}
+// GET, PATCH, PUT, DELETE /rate-limits/:bucket/:windowStart
+```
+
+`field` is the entity property. Every segment is part of the WHERE clause, so
+a request acts on the row the whole key names or answers 404.
+
+### `@CrudAuth` insertOnly
+
+`insertOnly: (req) => boolean` marks a caller whose create may only add rows,
+for an entity scoped some way `persist` does not express, such as through a
+parent row. It has the same effect as a `persist` that pins a field: a create
+that names an existing key answers 409 and leaves the row as it was.
+
+### A `timestamp` key on a server not on UTC
+
+A `timestamp` column with no time zone is written in the server's zone. A key
+or filter value sent as an instant with a zone, which is how a response
+returns the column (`2026-01-01T00:00:00.000Z`), is read the same way, so the
+value the API returned finds its row whatever zone the server runs in.
+
+### A key the caller sends, under `@CrudAuth` persist
+
+When `persist` pins a field, a create drops a primary key the database
+generates and keeps a key column the caller sends (a slug, a uuid with no
+default, the columns of a composite key). Such a create only adds a row: it
+answers 409 when a row already has the key, including a soft-deleted row and
+a row the caller's filter would not let it read, and that row is left as it
+was. When two requests create the same key at the same moment, one succeeds
+and the other gets 409 too. A relation object sent
+for a key column (`{ "kind": { "id": 1 } }` where `kindId` is in the key) is
+read as that column on a create and dropped on an update, so it cannot point
+the write at another row.
+
 ```typescript
 @Injectable()
 export class PostService extends TypeOrmCrudService<Post> {

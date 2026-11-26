@@ -635,6 +635,138 @@ describe('TypeOrmCrudService', () => {
       expect(await service.replaceOne(pinned(1), body as any)).toEqual({ id: 1, name: 'A', workspaceId: 1, author: { id: 5 } });
     });
 
+    describe('a key the caller chooses', () => {
+      // A slug key the database does not generate, on a tenant-scoped entity.
+      const keyed = (existing: unknown) => {
+        const manager = {
+          findOne: jest.fn(async () => existing),
+          save: jest.fn(async (_target: unknown, e: unknown) => e)
+        };
+        const transaction = jest.fn((...args: any[]) => args[args.length - 1](manager));
+        const repo = {
+          ...mockRepository,
+          metadata: { name: 'Doc', primaryColumns: [{ propertyName: 'slug', isGenerated: false }], relations: [] },
+          manager: { transaction, connection: { options: { type: 'postgres' } } }
+        } as unknown as Repository<TestEntity>;
+        service = new TypeOrmCrudService(repo, {});
+        return { manager, transaction };
+      };
+
+      it('is kept, looked up, and saved in one REPEATABLE READ transaction', async () => {
+        const { manager, transaction } = keyed(null);
+        const saved: any = await service.createOne(pinned(), { slug: 'plan', name: 'A', workspaceId: 2 } as any);
+
+        expect(saved).toEqual({ slug: 'plan', name: 'A', workspaceId: 1 });
+        expect(transaction.mock.calls[0][0]).toBe('REPEATABLE READ');
+        expect(manager.findOne).toHaveBeenCalledWith(TestEntity, { where: { slug: 'plan' }, withDeleted: true });
+        expect(mockRepository.save).not.toHaveBeenCalled();
+      });
+
+      it('answers 409 when a row has the key, and saves nothing', async () => {
+        const { manager } = keyed({ slug: 'plan', workspaceId: 2 });
+        const err: any = await service.createOne(pinned(), { slug: 'plan', name: 'A' } as any).catch((e) => e);
+
+        expect(err.getStatus()).toBe(409);
+        expect(manager.save).not.toHaveBeenCalled();
+      });
+
+      it('answers 409 when another request inserts the key after the lookup', async () => {
+        const { transaction } = keyed(null);
+        transaction.mockImplementationOnce(async () => {
+          throw Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' });
+        });
+        const err: any = await service.createOne(pinned(), { slug: 'plan', name: 'A' } as any).catch((e) => e);
+        expect(err.getStatus()).toBe(409);
+      });
+
+      it('answers 409 for a bulk create that repeats a key, before any query', async () => {
+        const { transaction } = keyed(null);
+        const bulk = [{ slug: 'x', name: 'A' }, { slug: 'x', name: 'B' }];
+        const err: any = await service.createMany(pinned(), { bulk } as any).catch((e) => e);
+
+        expect(err.getStatus()).toBe(409);
+        expect(transaction).not.toHaveBeenCalled();
+      });
+
+      it('400s a key that is not a single value', async () => {
+        keyed(null);
+        const err: any = await service.createOne(pinned(), { slug: { $ne: '' }, name: 'A' } as any).catch((e) => e);
+        expect(err.getStatus()).toBe(400);
+      });
+
+      describe('and one key column is the foreign key of a relation', () => {
+        // save() reads the relation before the column, so { kind: { id } } names a row too.
+        const related = (existing: unknown) => {
+          const manager = {
+            findOne: jest.fn(async () => existing),
+            save: jest.fn(async (_target: unknown, e: unknown) => e),
+            createQueryBuilder: jest.fn(() => mockQueryBuilder)
+          };
+          const repo = {
+            ...mockRepository,
+            metadata: {
+              name: 'Tagging',
+              primaryColumns: [
+                { propertyName: 'slug', isGenerated: false },
+                { propertyName: 'kindId', isGenerated: false }
+              ],
+              relations: [
+                {
+                  propertyName: 'kind',
+                  isManyToOne: true,
+                  joinColumns: [{ propertyName: 'kindId', isPrimary: true, referencedColumn: { propertyName: 'id' } }]
+                },
+                { propertyName: 'author', isManyToOne: true, joinColumns: [{ propertyName: 'authorId', isPrimary: false }] }
+              ]
+            },
+            manager: {
+              transaction: (...args: any[]) => args[args.length - 1](manager),
+              connection: { options: { type: 'postgres' } }
+            }
+          } as unknown as Repository<TestEntity>;
+          service = new TypeOrmCrudService(repo, {});
+          return manager;
+        };
+
+        it('a create reads the relation object as the key column and looks that key up', async () => {
+          const manager = related(null);
+          const body = { slug: 't', kindId: 999, kind: { id: 1 }, author: { id: 5 } };
+          const saved: any = await service.createOne(pinned(), body as any);
+
+          expect(manager.findOne).toHaveBeenCalledWith(TestEntity, { where: { slug: 't', kindId: 1 }, withDeleted: true });
+          expect(saved).toEqual({ slug: 't', kindId: 1, author: { id: 5 }, workspaceId: 1 });
+        });
+
+        it('an update and a replace drop the relation object with the key columns', async () => {
+          const manager = related(null);
+          (mockQueryBuilder.getOne as jest.Mock).mockResolvedValue({ slug: 't', kindId: 2, note: 'old' });
+          (mockRepository.save as jest.Mock).mockImplementation(async (e) => e);
+          const body = { kind: { id: 1 }, kindId: 1, note: 'new' };
+
+          expect(await service.updateOne(pinned(), body as any)).toEqual({ slug: 't', kindId: 2, note: 'new', workspaceId: 1 });
+          expect(await service.replaceOne(pinned(), body as any)).toEqual({ slug: 't', kindId: 2, note: 'new', workspaceId: 1 });
+          expect(manager.save).toHaveBeenCalledTimes(1);
+        });
+      });
+
+      it('is insert-only too when CrudAuth insertOnly marks the caller and persist pins nothing', async () => {
+        const { manager } = keyed({ slug: 'plan' });
+        const req = pinned();
+        req.parsed.authPersist = {};
+        req.parsed.authInsertOnly = true;
+        const err: any = await service.createOne(req, { slug: 'plan', name: 'A' } as any).catch((e) => e);
+        expect(err.getStatus()).toBe(409);
+        expect(manager.save).not.toHaveBeenCalled();
+      });
+
+      it('saves without the lookup when the body leaves the key out', async () => {
+        const { transaction } = keyed(null);
+        await service.createOne(pinned(), { name: 'A' } as any);
+        expect(transaction).not.toHaveBeenCalled();
+        expect(mockRepository.save).toHaveBeenCalledWith({ name: 'A', workspaceId: 1 });
+      });
+    });
+
     it('createOne keeps a body id when persist pins nothing', async () => {
       const req = pinned();
       req.parsed.authPersist = {};
