@@ -1,6 +1,6 @@
 {
   "name": "@apso/crud",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Complete CRUD framework for NestJS with decorators and controllers",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -30,9 +30,9 @@
     "directory": "typescript/packages/crud"
   },
   "dependencies": {
-    "@apso/crud-core": "^1.1.0",
+    "@apso/crud-core": "^1.2.0",
     "@apso/crud-request": "^1.0.2",
-    "@apso/crud-typeorm": "^1.1.0",
+    "@apso/crud-typeorm": "^1.2.0",
     "@apso/postgrest-request": "^1.1.0"
   },
   "peerDependencies": {
