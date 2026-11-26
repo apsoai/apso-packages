@@ -210,7 +210,10 @@ beforeAll(async () => {
   class AppModule {}
   const module = await Test.createTestingModule({ imports: [AppModule] }).compile();
   app = module.createNestApplication();
-  await app.init();
+  // Listen on 127.0.0.1, where supertest connects. Left to supertest, the
+  // server binds every address and a request can reach another local process
+  // that holds the same port number on 127.0.0.1.
+  await app.listen(0, '127.0.0.1');
 });
 
 afterAll(async () => {
