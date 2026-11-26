@@ -16,7 +16,7 @@ import { Test } from '@nestjs/testing';
 import { InjectRepository, TypeOrmModule } from '@nestjs/typeorm';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import request from 'supertest';
-import { Column, DataSource, Entity, PrimaryColumn, PrimaryGeneratedColumn, Repository } from 'typeorm';
+import { Column, DataSource, DeleteDateColumn, Entity, JoinColumn, ManyToOne, PrimaryColumn, PrimaryGeneratedColumn, Repository } from 'typeorm';
 import { PGliteDriver, getPGliteInstance } from 'typeorm-pglite';
 import { Crud, CrudAuth } from '@apso/crud';
 import { TypeOrmCrudService } from '@apso/crud-typeorm';
@@ -54,7 +54,33 @@ class Note {
   @Column('text') text!: string;
 }
 
-const ENTITIES = [RateLimit, Page, Doc, Note];
+/** Not scoped: a lookup table any tenant may reference. */
+@Entity('kind')
+class Kind {
+  @PrimaryGeneratedColumn() id!: number;
+  @Column('text') name!: string;
+}
+
+/** Tenant-scoped, and one key column is the foreign key of a relation. */
+@Entity('tagging')
+class Tagging {
+  @PrimaryColumn('text') slug!: string;
+  @PrimaryColumn('int') kindId!: number;
+  @ManyToOne(() => Kind) @JoinColumn({ name: 'kindId' }) kind?: Kind;
+  @Column('int') workspaceId!: number;
+  @Column('text') note!: string;
+}
+
+/** Tenant-scoped, soft-deleted, with a key the caller sends. */
+@Entity('draft')
+class Draft {
+  @PrimaryColumn('text') slug!: string;
+  @Column('int') workspaceId!: number;
+  @Column('text') title!: string;
+  @DeleteDateColumn({ type: 'timestamptz', nullable: true }) deletedAt?: Date | null;
+}
+
+const ENTITIES = [RateLimit, Page, Doc, Note, Kind, Tagging, Draft];
 const tenant = (req: any) => ({ workspaceId: Number(req.headers['x-ws']) });
 const SCOPED = { filter: tenant, persist: tenant };
 
@@ -121,6 +147,38 @@ class NoteController {
   constructor(public service: NoteService) {}
 }
 
+@Injectable()
+class TaggingService extends TypeOrmCrudService<Tagging> {
+  constructor(@InjectRepository(Tagging) repo: Repository<Tagging>) {
+    super(repo);
+  }
+}
+@Crud({
+  model: { type: Tagging },
+  params: {
+    slug: { field: 'slug', type: 'string', primary: true },
+    kindId: { field: 'kindId', type: 'string', primary: true },
+  },
+})
+@CrudAuth(SCOPED)
+@Controller('taggings')
+class TaggingController {
+  constructor(public service: TaggingService) {}
+}
+
+@Injectable()
+class DraftService extends TypeOrmCrudService<Draft> {
+  constructor(@InjectRepository(Draft) repo: Repository<Draft>) {
+    super(repo);
+  }
+}
+@Crud({ model: { type: Draft }, params: { id: { field: 'slug', type: 'string', primary: true } } })
+@CrudAuth(SCOPED)
+@Controller('drafts')
+class DraftController {
+  constructor(public service: DraftService) {}
+}
+
 let app: INestApplication;
 let ds: DataSource;
 const http = () => request(app.getHttpServer());
@@ -146,8 +204,8 @@ beforeAll(async () => {
       TypeOrmModule.forRootAsync({ useFactory: () => ({}) as any, dataSourceFactory: async () => ds }),
       TypeOrmModule.forFeature(ENTITIES),
     ],
-    controllers: [RateLimitController, PageController, DocController, NoteController],
-    providers: [RateLimitService, PageService, DocService, NoteService],
+    controllers: [RateLimitController, PageController, DocController, NoteController, TaggingController, DraftController],
+    providers: [RateLimitService, PageService, DocService, NoteService, TaggingService, DraftService],
   })
   class AppModule {}
   const module = await Test.createTestingModule({ imports: [AppModule] }).compile();
@@ -267,6 +325,59 @@ describe('a create that names its own key, under auth persist', () => {
     expect(stolen.status).toBe(201);
     expect(stolen.body.id).not.toBe(mine.body.id);
     expect(await ds.getRepository(Note).findOneBy({ id: mine.body.id })).toMatchObject({ workspaceId: 1, text: 'mine' });
+  });
+
+  describe('with a key column that is the foreign key of a relation', () => {
+    const stored = () => ds.getRepository(Tagging).find({ order: { kindId: 'ASC' } });
+    let one: number;
+    let two: number;
+
+    beforeAll(async () => {
+      [one, two] = (await ds.getRepository(Kind).save([{ name: 'one' }, { name: 'two' }])).map((k) => k.id);
+      expect((await http().post('/taggings').set(as(1)).send({ slug: 't', kindId: one, note: 'mine' })).status).toBe(201);
+      expect((await http().post('/taggings').set(as(2)).send({ slug: 't', kindId: two, note: 'theirs' })).status).toBe(201);
+    });
+
+    // save() reads the relation before the column, so a relation object names a row too.
+    it('reads a relation object as the key column on a create', async () => {
+      const single = await http().post('/taggings').set(as(2)).send({ slug: 't', kind: { id: one }, note: 'stolen' });
+      const both = await http().post('/taggings').set(as(2)).send({ slug: 't', kindId: 999, kind: { id: one }, note: 'stolen' });
+      const bulk = await http().post('/taggings/bulk').set(as(2)).send({ bulk: [{ slug: 't', kind: { id: one }, note: 'stolen' }] });
+
+      expect([single.status, both.status, bulk.status]).toEqual([409, 409, 409]);
+      expect(await stored()).toEqual([
+        { slug: 't', kindId: one, workspaceId: 1, note: 'mine' },
+        { slug: 't', kindId: two, workspaceId: 2, note: 'theirs' },
+      ]);
+    });
+
+    it('creates the row the relation object names when the key is free', async () => {
+      const created = await http().post('/taggings').set(as(2)).send({ slug: 'free', kind: { id: one }, note: 'new' });
+      expect([created.status, created.body]).toMatchObject([201, { slug: 'free', kindId: one, workspaceId: 2 }]);
+      await ds.getRepository(Tagging).delete({ slug: 'free' });
+    });
+
+    it('drops a relation object for a key column on PATCH and PUT', async () => {
+      const patched = await http().patch(`/taggings/t/${two}`).set(as(2)).send({ kind: { id: one }, note: 'via-patch' });
+      expect([patched.status, patched.body]).toMatchObject([200, { kindId: two, note: 'via-patch' }]);
+      const replaced = await http().put(`/taggings/t/${two}`).set(as(2)).send({ kind: { id: one }, note: 'via-put' });
+      expect([replaced.status, replaced.body]).toMatchObject([200, { kindId: two, note: 'via-put' }]);
+
+      expect(await stored()).toEqual([
+        { slug: 't', kindId: one, workspaceId: 1, note: 'mine' },
+        { slug: 't', kindId: two, workspaceId: 2, note: 'via-put' },
+      ]);
+    });
+  });
+
+  it('answers 409 for a key a soft-deleted row has', async () => {
+    const drafts = ds.getRepository(Draft);
+    await drafts.save({ slug: 'plan', workspaceId: 1, title: 'mine' });
+    await drafts.softDelete({ slug: 'plan' });
+
+    const taken = await http().post('/drafts').set(as(2)).send({ slug: 'plan', title: 'theirs' });
+    expect(taken.status).toBe(409);
+    expect(await drafts.findOne({ where: { slug: 'plan' }, withDeleted: true })).toMatchObject({ workspaceId: 1, title: 'mine' });
   });
 
   it('looks the key up and saves in one REPEATABLE READ transaction', async () => {

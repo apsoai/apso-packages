@@ -639,7 +639,7 @@ describe('TypeOrmCrudService', () => {
       // A slug key the database does not generate, on a tenant-scoped entity.
       const keyed = (existing: unknown) => {
         const manager = {
-          findOneBy: jest.fn(async () => existing),
+          findOne: jest.fn(async () => existing),
           save: jest.fn(async (_target: unknown, e: unknown) => e)
         };
         const transaction = jest.fn((...args: any[]) => args[args.length - 1](manager));
@@ -658,7 +658,7 @@ describe('TypeOrmCrudService', () => {
 
         expect(saved).toEqual({ slug: 'plan', name: 'A', workspaceId: 1 });
         expect(transaction.mock.calls[0][0]).toBe('REPEATABLE READ');
-        expect(manager.findOneBy).toHaveBeenCalledWith(TestEntity, { slug: 'plan' });
+        expect(manager.findOne).toHaveBeenCalledWith(TestEntity, { where: { slug: 'plan' }, withDeleted: true });
         expect(mockRepository.save).not.toHaveBeenCalled();
       });
 
@@ -683,6 +683,61 @@ describe('TypeOrmCrudService', () => {
         keyed(null);
         const err: any = await service.createOne(pinned(), { slug: { $ne: '' }, name: 'A' } as any).catch((e) => e);
         expect(err.getStatus()).toBe(400);
+      });
+
+      describe('and one key column is the foreign key of a relation', () => {
+        // save() reads the relation before the column, so { kind: { id } } names a row too.
+        const related = (existing: unknown) => {
+          const manager = {
+            findOne: jest.fn(async () => existing),
+            save: jest.fn(async (_target: unknown, e: unknown) => e),
+            createQueryBuilder: jest.fn(() => mockQueryBuilder)
+          };
+          const repo = {
+            ...mockRepository,
+            metadata: {
+              name: 'Tagging',
+              primaryColumns: [
+                { propertyName: 'slug', isGenerated: false },
+                { propertyName: 'kindId', isGenerated: false }
+              ],
+              relations: [
+                {
+                  propertyName: 'kind',
+                  isManyToOne: true,
+                  joinColumns: [{ propertyName: 'kindId', isPrimary: true, referencedColumn: { propertyName: 'id' } }]
+                },
+                { propertyName: 'author', isManyToOne: true, joinColumns: [{ propertyName: 'authorId', isPrimary: false }] }
+              ]
+            },
+            manager: {
+              transaction: (...args: any[]) => args[args.length - 1](manager),
+              connection: { options: { type: 'postgres' } }
+            }
+          } as unknown as Repository<TestEntity>;
+          service = new TypeOrmCrudService(repo, {});
+          return manager;
+        };
+
+        it('a create reads the relation object as the key column and looks that key up', async () => {
+          const manager = related(null);
+          const body = { slug: 't', kindId: 999, kind: { id: 1 }, author: { id: 5 } };
+          const saved: any = await service.createOne(pinned(), body as any);
+
+          expect(manager.findOne).toHaveBeenCalledWith(TestEntity, { where: { slug: 't', kindId: 1 }, withDeleted: true });
+          expect(saved).toEqual({ slug: 't', kindId: 1, author: { id: 5 }, workspaceId: 1 });
+        });
+
+        it('an update and a replace drop the relation object with the key columns', async () => {
+          const manager = related(null);
+          (mockQueryBuilder.getOne as jest.Mock).mockResolvedValue({ slug: 't', kindId: 2, note: 'old' });
+          (mockRepository.save as jest.Mock).mockImplementation(async (e) => e);
+          const body = { kind: { id: 1 }, kindId: 1, note: 'new' };
+
+          expect(await service.updateOne(pinned(), body as any)).toEqual({ slug: 't', kindId: 2, note: 'new', workspaceId: 1 });
+          expect(await service.replaceOne(pinned(), body as any)).toEqual({ slug: 't', kindId: 2, note: 'new', workspaceId: 1 });
+          expect(manager.save).toHaveBeenCalledTimes(1);
+        });
       });
 
       it('saves without the lookup when the body leaves the key out', async () => {

@@ -311,7 +311,8 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
 
     const work = async (manager: EntityManager) => {
       for (const key of keys) {
-        if (await manager.findOneBy(this.repository.target, key as any)) throw taken();
+        // save() also matches a soft-deleted row, so the lookup must see it.
+        if (await manager.findOne(this.repository.target, { where: key as any, withDeleted: true })) throw taken();
       }
       return manager.save(this.repository.target, entities);
     };
@@ -422,16 +423,29 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     const body: any = this.withAuthPersist(req, dto);
     if (!this.pins(req) || !body || typeof body !== 'object') return body;
     const out = { ...body };
+    // A relation object sent for a key column becomes that column: save()
+    // reads the relation first, so it would otherwise name the row unseen.
+    for (const { relation, column, referenced } of this.keyRelations()) {
+      if (!Object.prototype.hasOwnProperty.call(out, relation)) continue;
+      const value = out[relation];
+      const id = value !== null && typeof value === 'object' ? value[referenced] : value;
+      if (id !== undefined) out[column] = id;
+    }
+    for (const { relation } of this.keyRelations()) delete out[relation];
     for (const pk of this.generatedPrimaryKeys()) delete out[pk];
     return out;
   }
 
-  /** Remove primary-key fields from a mutation body (nestjsx behavior). */
+  /** Remove the primary key from a mutation body: its columns (nestjsx behavior) and the relations that fill them. */
   protected stripPrimaryKeys<D>(dto: D): D {
     if (!dto || typeof dto !== 'object') return dto;
     const out: any = { ...(dto as any) };
     for (const pk of this.rootPrimaryKeys()) {
       delete out[pk];
+    }
+    // A relation whose foreign key is a key column names the row too.
+    for (const { relation } of this.keyRelations()) {
+      delete out[relation];
     }
     return out;
   }
@@ -516,6 +530,29 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     } catch {
       const t = this.entity as any;
       return (t && t.name) || 'Entity';
+    }
+  }
+
+  /**
+   * To-one relations whose foreign key is part of the primary key: the
+   * relation property, the key column it fills, and the property of the
+   * related row it takes the value from.
+   */
+  protected keyRelations(): { relation: string; column: string; referenced: string }[] {
+    try {
+      return this.repository.metadata.relations
+        .filter(relation => relation.isManyToOne || relation.isOneToOneOwner)
+        .flatMap(relation =>
+          relation.joinColumns
+            .filter(column => column.isPrimary && column.referencedColumn)
+            .map(column => ({
+              relation: relation.propertyName,
+              column: column.propertyName,
+              referenced: column.referencedColumn!.propertyName,
+            })),
+        );
+    } catch {
+      return [];
     }
   }
 

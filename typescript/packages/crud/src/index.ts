@@ -6,7 +6,7 @@
  */
 
 // Export main decorators and base classes
-export { Crud } from './crud.decorator';
+export { Crud, oneRowRoute } from './crud.decorator';
 export { CrudControllerBase } from './crud-controller.base';
 
 // nestjsx/crud-compatible surface: these names match @nestjsx/crud exactly

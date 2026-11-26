@@ -123,8 +123,13 @@ a request acts on the row the whole key names or answers 404.
 When `persist` pins a field, a create drops a primary key the database
 generates and keeps a key column the caller sends (a slug, a uuid with no
 default, the columns of a composite key). Such a create only adds a row: it
-answers 409 when a row already has the key, including a row the caller's
-filter would not let it read, and that row is left as it was.
+answers 409 when a row already has the key, including a soft-deleted row and
+a row the caller's filter would not let it read, and that row is left as it
+was. When two requests create the same key at the same moment, one succeeds
+and the other gets the database's duplicate-key error. A relation object sent
+for a key column (`{ "kind": { "id": 1 } }` where `kindId` is in the key) is
+read as that column on a create and dropped on an update, so it cannot point
+the write at another row.
 
 ```typescript
 @Injectable()
