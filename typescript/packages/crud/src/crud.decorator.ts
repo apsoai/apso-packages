@@ -66,6 +66,11 @@ export function Crud(options: CrudControllerOptions): ClassDecorator {
 function generateCrudRoutes(target: any, options: CrudControllerOptions) {
   const routes = options.routes;
   const entityName = options.model?.type?.name || 'Entity';
+  const one = oneRowRoute(options);
+  const keyParams = () =>
+    one.params.map(name =>
+      ApiParam({ name, description: name === 'id' ? `${entityName} ID` : `${entityName} ${one.fields[name]}` }),
+    );
 
   // GET Many - GET /
   if (!routes?.exclude?.includes('getManyBase')) {
@@ -103,12 +108,12 @@ function generateCrudRoutes(target: any, options: CrudControllerOptions) {
   // GET One - GET /:id
   if (!routes?.exclude?.includes('getOneBase')) {
     const getOneDecorators = [
-      Get(':id'),
+      Get(one.path),
       ApiOperation({
         summary: `Get one ${entityName}`,
         description: `Retrieve a single ${entityName} entity by ID`
       }),
-      ApiParam({ name: 'id', description: `${entityName} ID` }),
+      ...keyParams(),
       ApiResponse({
         status: 200,
         description: `${entityName} entity retrieved successfully`,
@@ -200,12 +205,12 @@ function generateCrudRoutes(target: any, options: CrudControllerOptions) {
   if (!routes?.exclude?.includes('updateOneBase')) {
     const updateDto = options.dto?.update || options.model.type;
     const updateOneDecorators = [
-      Patch(':id'),
+      Patch(one.path),
       ApiOperation({
         summary: `Update ${entityName}`,
         description: `Update an existing ${entityName} entity (partial update)`
       }),
-      ApiParam({ name: 'id', description: `${entityName} ID` }),
+      ...keyParams(),
       ApiBody({
         type: updateDto,
         description: `${entityName} data for update`
@@ -230,12 +235,12 @@ function generateCrudRoutes(target: any, options: CrudControllerOptions) {
   if (!routes?.exclude?.includes('replaceOneBase')) {
     const replaceDto = options.dto?.replace || options.model.type;
     const replaceOneDecorators = [
-      Put(':id'),
+      Put(one.path),
       ApiOperation({
         summary: `Replace ${entityName}`,
         description: `Replace an existing ${entityName} entity (full replacement)`
       }),
-      ApiParam({ name: 'id', description: `${entityName} ID` }),
+      ...keyParams(),
       ApiBody({
         type: replaceDto,
         description: `${entityName} data for replacement`
@@ -259,12 +264,12 @@ function generateCrudRoutes(target: any, options: CrudControllerOptions) {
   // DELETE - DELETE /:id
   if (!routes?.exclude?.includes('deleteOneBase')) {
     const deleteOneDecorators = [
-      Delete(':id'),
+      Delete(one.path),
       ApiOperation({
         summary: `Delete ${entityName}`,
         description: `Delete an existing ${entityName} entity`
       }),
-      ApiParam({ name: 'id', description: `${entityName} ID` }),
+      ...keyParams(),
       ApiResponse({
         status: 200,
         description: `${entityName} deleted successfully`
@@ -279,12 +284,12 @@ function generateCrudRoutes(target: any, options: CrudControllerOptions) {
   if (!routes?.exclude?.includes('recoverOneBase') &&
       options.query?.softDelete !== false) {
     const recoverOneDecorators = [
-      Patch(':id/recover'),
+      Patch(`${one.path}/recover`),
       ApiOperation({
         summary: `Recover ${entityName}`,
         description: `Recover a soft-deleted ${entityName} entity`
       }),
-      ApiParam({ name: 'id', description: `${entityName} ID` }),
+      ...keyParams(),
       ApiResponse({
         status: 200,
         description: `${entityName} recovered successfully`,
@@ -300,6 +305,23 @@ function generateCrudRoutes(target: any, options: CrudControllerOptions) {
 
     applyMethodDecorators(target, 'recoverOne', recoverOneDecorators);
   }
+}
+
+/**
+ * The path of the routes that address one row. `params` entries marked
+ * `primary` each become a path segment, in the order they are declared, so a
+ * two-column key is read at /:bucket/:windowStart. With none marked, the path
+ * is /:id.
+ */
+export function oneRowRoute(options: CrudControllerOptions): {
+  path: string;
+  params: string[];
+  fields: Record<string, string>;
+} {
+  const primary = Object.entries(options.params ?? {}).filter(([, param]) => param?.primary);
+  const params = primary.length ? primary.map(([name]) => name) : ['id'];
+  const fields = Object.fromEntries(params.map(name => [name, options.params?.[name]?.field ?? name]));
+  return { path: params.map(name => `:${name}`).join('/'), params, fields };
 }
 
 /** @nestjs/swagger's metadata key for a handler's documented parameters. */

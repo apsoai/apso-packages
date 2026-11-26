@@ -5,8 +5,8 @@
  * with enhanced features and bug fixes (including the duplicate field selection issue).
  */
 
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Brackets, Repository, SelectQueryBuilder, EntityTarget, ObjectLiteral, WhereExpressionBuilder } from 'typeorm';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { Brackets, EntityManager, Repository, SelectQueryBuilder, EntityTarget, ObjectLiteral, WhereExpressionBuilder } from 'typeorm';
 import {
   CrudService,
   ParsedRequest,
@@ -267,14 +267,15 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   }
 
   async createOne(req: ParsedRequest, dto: DeepPartial<T>): Promise<CreateOneResponse<T>> {
-    const entity = this.repository.create(this.forCreate(req, dto) as any);
+    const body = this.forCreate(req, dto);
+    const entity = this.repository.create(body as any);
     // Echo the saved entity as-is. This is an INTENDED divergence from
     // @nestjsx/crud (#44): on a timestamp column, nestjsx re-hydrates the
     // echoed value through the server's local timezone, so a posted UTC
     // instant comes back shifted; @apso/crud echoes the correct UTC instant.
     // We do NOT replicate that timezone bug (Matt's decision, 2026-07-29) —
     // the parity corpus marks #44 as an accepted divergence, not a mismatch.
-    return await this.repository.save(entity) as unknown as T;
+    return await this.saveNew(req, [body], entity) as unknown as T;
   }
 
   async createMany(req: ParsedRequest, dto: CreateManyDto<T>): Promise<CreateManyResponse<T>> {
@@ -287,7 +288,61 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     const entities = this.repository.create(bulk);
     // Echo the saved entities as-given (same as createOne — #44 timestamp
     // divergence from nestjsx is intended, not replicated).
-    return await this.repository.save(entities) as T[];
+    return await this.saveNew(req, bulk, entities) as T[];
+  }
+
+  /**
+   * Save the rows of a create. Under auth.persist, a body that names its own
+   * whole primary key may only add a row. save() updates the row a key names,
+   * and that row may belong to another caller, so the key is looked up first
+   * and an existing one answers 409. On Postgres the lookup and the save
+   * share one snapshot (REPEATABLE READ): a row another request commits in
+   * between is not seen by save(), so its INSERT fails on the primary key
+   * like any other duplicate.
+   * ponytail: on another database the two run in a plain transaction, where
+   * a create of the same key that commits in between is still written over.
+   */
+  protected async saveNew(req: ParsedRequest, bodies: any[], entities: any): Promise<any> {
+    const keys = this.pins(req) ? bodies.map(body => this.chosenKey(body)).filter(Boolean) : [];
+    if (keys.length === 0) return this.repository.save(entities);
+
+    const taken = () => new ConflictException(`A ${this.entityName()} with this key already exists`);
+    if (new Set(keys.map(key => JSON.stringify(key))).size < keys.length) throw taken();
+
+    const work = async (manager: EntityManager) => {
+      for (const key of keys) {
+        if (await manager.findOneBy(this.repository.target, key as any)) throw taken();
+      }
+      return manager.save(this.repository.target, entities);
+    };
+    const manager = this.repository.manager;
+    return /postgres/.test(String(manager.connection.options.type))
+      ? manager.transaction('REPEATABLE READ', work)
+      : manager.transaction(work);
+  }
+
+  /** True when auth.persist pins at least one field of this request's writes. */
+  protected pins(req: ParsedRequest): boolean {
+    const persist = req.parsed.authPersist;
+    return Boolean(persist) && typeof persist === 'object' && Object.keys(persist).length > 0;
+  }
+
+  /**
+   * The primary key a create body names, when it names every key column.
+   * With a column missing, save() cannot match an existing row and inserts.
+   */
+  protected chosenKey(body: any): Record<string, unknown> | undefined {
+    if (!body || typeof body !== 'object') return undefined;
+    const key: Record<string, unknown> = {};
+    for (const pk of this.rootPrimaryKeys()) {
+      const value = body[pk];
+      if (value === undefined || value === null) return undefined;
+      if (typeof value === 'object' && !(value instanceof Date)) {
+        throw new BadRequestException(`'${pk}' must be a single value`);
+      }
+      key[pk] = value;
+    }
+    return key;
   }
 
   async updateOne(req: ParsedRequest, dto: DeepPartial<T>): Promise<UpdateOneResponse<T>> {
@@ -357,15 +412,18 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
   }
 
   /**
-   * A create body with auth.persist applied. When persist pins a field, the
-   * body's primary key is dropped: save() updates the row a primary key
-   * names, and that row may not be one the auth filter allows.
+   * A create body with auth.persist applied. When persist pins a field, a
+   * primary key the database generates is dropped from the body: the caller
+   * does not choose it. A key column the caller does supply (a slug, a uuid
+   * with no default, a composite key) is kept, and saveNew() makes sure the
+   * create adds a row and never writes over the one that already has the key.
    */
   protected forCreate<D>(req: ParsedRequest, dto: D): D {
-    const body = this.withAuthPersist(req, dto);
-    const persist = req.parsed.authPersist;
-    const pins = persist && typeof persist === 'object' && Object.keys(persist).length > 0;
-    return pins ? this.stripPrimaryKeys(body) : body;
+    const body: any = this.withAuthPersist(req, dto);
+    if (!this.pins(req) || !body || typeof body !== 'object') return body;
+    const out = { ...body };
+    for (const pk of this.generatedPrimaryKeys()) delete out[pk];
+    return out;
   }
 
   /** Remove primary-key fields from a mutation body (nestjsx behavior). */
@@ -458,6 +516,20 @@ export class TypeOrmCrudService<T extends ObjectLiteral> implements CrudService<
     } catch {
       const t = this.entity as any;
       return (t && t.name) || 'Entity';
+    }
+  }
+
+  /**
+   * Primary key columns the database fills in (serial, identity, generated
+   * uuid). Every key column counts when the metadata does not say.
+   */
+  protected generatedPrimaryKeys(): string[] {
+    try {
+      const columns = this.repository.metadata.primaryColumns;
+      if (columns.some(c => typeof c.isGenerated !== 'boolean')) return columns.map(c => c.propertyName);
+      return columns.filter(c => c.isGenerated).map(c => c.propertyName);
+    } catch {
+      return ['id'];
     }
   }
 

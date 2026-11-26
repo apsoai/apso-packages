@@ -96,6 +96,36 @@ export class PostController implements CrudController<Post> {
 }
 ```
 
+### A key of more than one column
+
+The routes that address one row take their path from the `params` entries
+marked `primary`, one segment each, in the order they are declared. One
+primary param named `id` (or none) is `/:id`. Two give `/:bucket/:windowStart`:
+
+```typescript
+@Crud({
+  model: { type: RateLimit },
+  params: {
+    bucket: { field: 'bucket', type: 'string', primary: true },
+    windowStart: { field: 'windowStart', type: 'string', primary: true },
+  },
+})
+@Controller('rate-limits')
+export class RateLimitController {}
+// GET, PATCH, PUT, DELETE /rate-limits/:bucket/:windowStart
+```
+
+`field` is the entity property. Every segment is part of the WHERE clause, so
+a request acts on the row the whole key names or answers 404.
+
+### A key the caller sends, under `@CrudAuth` persist
+
+When `persist` pins a field, a create drops a primary key the database
+generates and keeps a key column the caller sends (a slug, a uuid with no
+default, the columns of a composite key). Such a create only adds a row: it
+answers 409 when a row already has the key, including a row the caller's
+filter would not let it read, and that row is left as it was.
+
 ```typescript
 @Injectable()
 export class PostService extends TypeOrmCrudService<Post> {
